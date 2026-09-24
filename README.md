@@ -5,8 +5,8 @@ Symfony 7.4 (PHP ≥ 8.2) API for scanning QR/barcodes in PDF files and splittin
 ## Requirements
 
 - PHP 8.2+
-- Extensions: `ctype`, `iconv`, `zip`, `gd` or `imagick`
-- System tools: `pdftoppm` (poppler-utils), `zbarimg` (zbar-tools), `qpdf`
+- Extensions: `ctype`, `iconv`, `mbstring`, `zip` (`gd` optional — for QR in embedded images)
+- Composer packages only — **no** system tools (`pdftoppm`, `zbarimg`, `qpdf`) needed
 
 ## Setup
 

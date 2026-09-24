@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace App\Service;
 
 use RuntimeException;
+use setasign\Fpdi\Fpdi;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
-use Symfony\Component\Process\Process;
 use ZipArchive;
 
+/**
+ * Splits PDF pages using Composer packages only (FPDI + FPDF), no qpdf CLI.
+ */
 final class PdfPageSplitter
 {
     public function __construct(
@@ -25,7 +28,6 @@ final class PdfPageSplitter
 
         $workDir = $this->createWorkDir('split');
         $pagesDir = $workDir.'/pages';
-        $pdfPath = $workDir.'/input.pdf';
 
         try {
             if (!mkdir($pagesDir, 0775, true) && !is_dir($pagesDir)) {
@@ -33,34 +35,28 @@ final class PdfPageSplitter
             }
 
             $pdf->move($workDir, 'input.pdf');
+            $pdfPath = $workDir.'/input.pdf';
 
-            $process = new Process([
-                'qpdf',
-                '--split-pages',
-                $pdfPath,
-                $pagesDir.'/page.pdf',
-            ]);
-            $process->setTimeout(120);
-            $process->run();
+            $reader = new Fpdi();
+            $pageCount = $reader->setSourceFile($pdfPath);
 
-            if (!$process->isSuccessful()) {
-                throw new RuntimeException('Failed to split PDF pages: '.$process->getErrorOutput());
-            }
-
-            $pageFiles = glob($pagesDir.'/page-*.pdf') ?: [];
-            natsort($pageFiles);
-            $pageFiles = array_values($pageFiles);
-
-            if ($pageFiles === []) {
-                // qpdf may produce page.pdf for single-page docs depending on version
-                $single = $pagesDir.'/page.pdf';
-                if (is_file($single)) {
-                    $pageFiles = [$single];
-                }
-            }
-
-            if ($pageFiles === []) {
+            if ($pageCount < 1) {
                 throw new RuntimeException('No pages were produced from the PDF.');
+            }
+
+            $pageFiles = [];
+            for ($page = 1; $page <= $pageCount; ++$page) {
+                $pagePdf = new Fpdi();
+                $pagePdf->setSourceFile($pdfPath);
+                $templateId = $pagePdf->importPage($page);
+                $size = $pagePdf->getTemplateSize($templateId);
+
+                $pagePdf->AddPage($size['orientation'], [$size['width'], $size['height']]);
+                $pagePdf->useTemplate($templateId);
+
+                $pageFile = sprintf('%s/page_%04d.pdf', $pagesDir, $page);
+                $pagePdf->Output('F', $pageFile);
+                $pageFiles[] = $pageFile;
             }
 
             $id = bin2hex(random_bytes(16));
@@ -77,10 +73,8 @@ final class PdfPageSplitter
                 throw new RuntimeException('Unable to create ZIP archive.');
             }
 
-            $index = 1;
-            foreach ($pageFiles as $pageFile) {
-                $zip->addFile((string) $pageFile, sprintf('page_%04d.pdf', $index));
-                ++$index;
+            foreach ($pageFiles as $index => $pageFile) {
+                $zip->addFile($pageFile, sprintf('page_%04d.pdf', $index + 1));
             }
             $zip->close();
 
