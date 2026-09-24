@@ -10,6 +10,8 @@ use Symfony\Component\Process\Process;
 
 final class PdfBarcodeScanner
 {
+    private const DEFAULT_DPI = 300;
+
     public function __construct(
         private readonly string $storageDir,
     ) {
@@ -61,38 +63,28 @@ final class PdfBarcodeScanner
      */
     private function scanPdfPath(string $pdfPath, string $workDir, ?int $maxPages = null): array
     {
-        $prefix = $workDir.'/page';
-        $command = [
-            'pdftoppm',
-            '-png',
-            '-r', '200',
-        ];
-
-        if ($maxPages !== null && $maxPages > 0) {
-            $command[] = '-f';
-            $command[] = '1';
-            $command[] = '-l';
-            $command[] = (string) $maxPages;
-        }
-
-        $command[] = $pdfPath;
-        $command[] = $prefix;
-
-        $process = new Process($command);
-        $process->setTimeout(120);
-        $process->run();
-
-        if (!$process->isSuccessful()) {
-            throw new RuntimeException('Failed to convert PDF pages to images: '.$process->getErrorOutput());
-        }
+        $this->renderPdfPages($pdfPath, $workDir.'/page', self::DEFAULT_DPI, $maxPages);
 
         $images = glob($workDir.'/page-*.png') ?: [];
         natsort($images);
 
+        if ($images === []) {
+            throw new RuntimeException('PDF conversion produced no page images.');
+        }
+
         $codes = [];
+        $seen = [];
+
         foreach ($images as $imagePath) {
             $page = $this->extractPageNumber((string) $imagePath);
-            foreach ($this->scanImage((string) $imagePath) as $code) {
+            $found = $this->scanImageWithFallback((string) $imagePath, $workDir, $page);
+
+            foreach ($found as $code) {
+                $key = $page.'|'.$code['type'].'|'.$code['data'];
+                if (isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
                 $codes[] = [
                     'page' => $page,
                     'type' => $code['type'],
@@ -107,14 +99,59 @@ final class PdfBarcodeScanner
     /**
      * @return list<array{type: string, data: string}>
      */
+    private function scanImageWithFallback(string $imagePath, string $workDir, int $page): array
+    {
+        $codes = $this->scanImage($imagePath);
+        if ($codes !== []) {
+            return $codes;
+        }
+
+        // Ticket barcodes (I2/5) often need contrast boost / rotation.
+        $grayPath = sprintf('%s/gray-p%d.png', $workDir, $page);
+        $this->runOrFail([
+            'convert',
+            $imagePath,
+            '-colorspace', 'Gray',
+            '-normalize',
+            '-sharpen', '0x1.2',
+            $grayPath,
+        ], 'Failed to preprocess page image');
+
+        $codes = $this->scanImage($grayPath);
+        if ($codes !== []) {
+            return $codes;
+        }
+
+        foreach ([90, 270] as $angle) {
+            $rotated = sprintf('%s/rot-p%d-%d.png', $workDir, $page, $angle);
+            $this->runOrFail([
+                'convert',
+                $grayPath,
+                '-rotate', (string) $angle,
+                $rotated,
+            ], 'Failed to rotate page image');
+
+            $codes = $this->scanImage($rotated);
+            if ($codes !== []) {
+                return $codes;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * @return list<array{type: string, data: string}>
+     */
     private function scanImage(string $imagePath): array
     {
         $process = new Process([
             'zbarimg',
             '--quiet',
+            '-S*.enable',
             $imagePath,
         ]);
-        $process->setTimeout(60);
+        $process->setTimeout(90);
         $process->run();
 
         // zbarimg: 0 = found, 1/4 = no symbols — not fatal for our use case.
@@ -149,6 +186,47 @@ final class PdfBarcodeScanner
         }
 
         return $codes;
+    }
+
+    private function renderPdfPages(string $pdfPath, string $prefix, int $dpi, ?int $maxPages): void
+    {
+        $command = [
+            'pdftoppm',
+            '-png',
+            '-r', (string) $dpi,
+        ];
+
+        if ($maxPages !== null && $maxPages > 0) {
+            $command[] = '-f';
+            $command[] = '1';
+            $command[] = '-l';
+            $command[] = (string) $maxPages;
+        }
+
+        $command[] = $pdfPath;
+        $command[] = $prefix;
+
+        $process = new Process($command);
+        $process->setTimeout(180);
+        $process->run();
+
+        if (!$process->isSuccessful()) {
+            throw new RuntimeException('Failed to convert PDF pages to images: '.$process->getErrorOutput());
+        }
+    }
+
+    /**
+     * @param list<string> $command
+     */
+    private function runOrFail(array $command, string $message): void
+    {
+        $process = new Process($command);
+        $process->setTimeout(60);
+        $process->run();
+
+        if (!$process->isSuccessful()) {
+            throw new RuntimeException($message.': '.$process->getErrorOutput());
+        }
     }
 
     private function extractPageNumber(string $imagePath): int

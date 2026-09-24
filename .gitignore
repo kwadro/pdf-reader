@@ -1,5 +1,6 @@
 
 ###> symfony/framework-bundle ###
+/.idea
 /deploy.php
 /2222
 /.env.local
