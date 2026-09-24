@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}PdfReader{% endblock %}</title>
+    <meta name="description" content="{% block meta_description %}API для зчитування QR і штрихкодів з PDF та розбиття документів на окремі сторінки.{% endblock %}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='10' fill='%23152820'/><path d='M14 18h36v4H14zm0 10h28v4H14zm0 10h32v4H14zm0 10h20v4H14z' fill='%23f2ebe0'/></svg>">
+    <link rel="stylesheet" href="{{ asset('css/landing.css') }}">
+    {% block stylesheets %}{% endblock %}
+</head>
+<body>
+    {% block body %}{% endblock %}
+    {% block javascripts %}{% endblock %}
+</body>
+</html>
