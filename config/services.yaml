@@ -28,6 +28,7 @@ services:
     App\Service\PdfBarcodeScanner:
         arguments:
             $storageDir: '%app.pdf_storage_dir%'
+            $methods: !tagged_iterator app.pdf_code_scan_method
 
     App\Service\PdfPageSplitter:
         arguments:

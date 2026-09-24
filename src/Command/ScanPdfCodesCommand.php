@@ -83,6 +83,10 @@ final class ScanPdfCodesCommand extends Command
                 'Max pages per PDF: %s',
                 $maxPages === null ? 'all' : (string) $maxPages
             )),
+            $this->line('INFO', sprintf(
+                'Scan methods: %s',
+                implode(', ', $this->barcodeScanner->getAvailableMethods()) ?: 'none'
+            )),
         ];
 
         $filesScanned = 0;
@@ -129,12 +133,13 @@ final class ScanPdfCodesCommand extends Command
 
                 foreach ($codes as $code) {
                     ++$codesFound;
-                    $entry = sprintf(
-                        'page=%d type=%s data=%s',
-                        $code['page'],
-                        $code['type'],
-                        $code['data']
-                    );
+                $entry = sprintf(
+                    'page=%d type=%s data=%s method=%s',
+                    $code['page'],
+                    $code['type'],
+                    $code['data'],
+                    $code['method'] ?? '?'
+                );
                     $io->writeln('  '.$entry);
                     $lines[] = $this->line('CODE', $entry);
                 }

@@ -17,7 +17,15 @@ cp .env.example .env   # if needed
 php -S 127.0.0.1:8000 -t public
 ```
 
-## Authentication
+## Code detection (3 methods)
+
+The scanner runs every available method and merges unique results:
+
+1. **text** — PDF text via `smalot/pdfparser` (ticket barcodes as fonts/text)
+2. **imagick** — render pages with PHP `imagick`, decode QR in PHP (+ `zbarimg` on images if present)
+3. **cli-zbar** — `pdftoppm` + `zbarimg` when both CLI tools exist
+
+On shared hosting with only `imagick` enabled, methods 1–2 are enough.
 
 All `/api/*` routes require an access token from `.env` (`API_ACCESS_TOKEN`).
 

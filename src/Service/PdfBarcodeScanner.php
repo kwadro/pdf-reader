@@ -4,24 +4,26 @@ declare(strict_types=1);
 
 namespace App\Service;
 
+use App\Service\BarcodeScan\PdfCodeScanMethodInterface;
 use RuntimeException;
-use Smalot\PdfParser\Parser as PdfParser;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
-use Zxing\QrReader;
 
 /**
- * Scans QR / barcodes from PDF using Composer packages only
- * (no pdftoppm, zbarimg, or ImageMagick CLI).
+ * Runs multiple detection methods and merges unique codes.
  */
 final class PdfBarcodeScanner
 {
+    /**
+     * @param iterable<PdfCodeScanMethodInterface> $methods
+     */
     public function __construct(
         private readonly string $storageDir,
+        private readonly iterable $methods,
     ) {
     }
 
     /**
-     * @return list<array{page: int, type: string, data: string}>
+     * @return list<array{page: int, type: string, data: string, method: string}>
      */
     public function scan(UploadedFile $pdf, ?int $maxPages = null): array
     {
@@ -39,7 +41,7 @@ final class PdfBarcodeScanner
     }
 
     /**
-     * @return list<array{page: int, type: string, data: string}>
+     * @return list<array{page: int, type: string, data: string, method: string}>
      */
     public function scanFile(string $pdfPath, ?int $maxPages = null): array
     {
@@ -62,176 +64,74 @@ final class PdfBarcodeScanner
     }
 
     /**
-     * @return list<array{page: int, type: string, data: string}>
+     * @return list<string>
+     */
+    public function getAvailableMethods(): array
+    {
+        $names = [];
+        foreach ($this->methods as $method) {
+            if ($method->isSupported()) {
+                $names[] = $method->getName();
+            }
+        }
+
+        return $names;
+    }
+
+    /**
+     * @return list<array{page: int, type: string, data: string, method: string}>
      */
     private function scanPdfPath(string $pdfPath, string $workDir, ?int $maxPages = null): array
     {
-        try {
-            $pdf = (new PdfParser())->parseFile($pdfPath);
-        } catch (\Throwable $e) {
-            throw new RuntimeException('Failed to parse PDF: '.$e->getMessage(), 0, $e);
-        }
-
-        $pages = $pdf->getPages();
-        $codes = [];
+        $merged = [];
         $seen = [];
-        $pageNumber = 0;
+        $anySupported = false;
 
-        foreach ($pages as $page) {
-            ++$pageNumber;
-
-            if ($maxPages !== null && $pageNumber > $maxPages) {
-                break;
-            }
-
-            $text = $this->normalizePdfText($page->getText());
-
-            foreach ($this->extractCodesFromText($text) as $code) {
-                $key = $pageNumber.'|'.$code['type'].'|'.$code['data'];
-                if (isset($seen[$key])) {
-                    continue;
-                }
-                $seen[$key] = true;
-                $codes[] = [
-                    'page' => $pageNumber,
-                    'type' => $code['type'],
-                    'data' => $code['data'],
-                ];
-            }
-
-            foreach ($this->extractQrFromPageObjects($page, $workDir, $pageNumber) as $code) {
-                $key = $pageNumber.'|'.$code['type'].'|'.$code['data'];
-                if (isset($seen[$key])) {
-                    continue;
-                }
-                $seen[$key] = true;
-                $codes[] = [
-                    'page' => $pageNumber,
-                    'type' => $code['type'],
-                    'data' => $code['data'],
-                ];
-            }
-        }
-
-        return $codes;
-    }
-
-    /**
-     * Ticket PDFs often store text as UTF-16BE (null bytes between chars).
-     */
-    private function normalizePdfText(string $text): string
-    {
-        if (str_contains($text, "\x00")) {
-            $text = str_replace("\x00", '', $text);
-        }
-
-        // Some parsers leave UTF-16 BOM leftovers.
-        $text = str_replace(["\xFE\xFF", "\xFF\xFE"], '', $text);
-
-        return trim(preg_replace("/[ \t]+/u", ' ', $text) ?? $text);
-    }
-
-    /**
-     * @return list<array{type: string, data: string}>
-     */
-    private function extractCodesFromText(string $text): array
-    {
-        $codes = [];
-
-        // Interleaved 2 of 5 / ticket barcodes: long numeric payloads.
-        if (preg_match_all('/(?<!\d)(\d{16,48})(?!\d)/', $text, $matches)) {
-            foreach (array_unique($matches[1]) as $digits) {
-                $codes[] = [
-                    'type' => 'I2/5',
-                    'data' => $digits,
-                ];
-            }
-        }
-
-        // TicketDirect-style codes: mix of letters + digits (e.g. 7YE5EHF1).
-        if (preg_match_all('/\b(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\d)[A-Z0-9]{6,16}\b/i', $text, $matches)) {
-            foreach (array_unique($matches[0]) as $value) {
-                // Skip obvious date fragments like 10.10.2026 leftovers already normalized away.
-                if (preg_match('/^\d+$/', $value)) {
-                    continue;
-                }
-                $codes[] = [
-                    'type' => 'TEXT-CODE',
-                    'data' => strtoupper($value),
-                ];
-            }
-        }
-
-        // Standalone URLs (often encoded as QR payloads too).
-        if (preg_match_all('#https?://[^\s<>"\']+#i', $text, $matches)) {
-            foreach (array_unique($matches[0]) as $url) {
-                $codes[] = [
-                    'type' => 'URL',
-                    'data' => rtrim($url, '.,);'),
-                ];
-            }
-        }
-
-        return $codes;
-    }
-
-    /**
-     * Try to decode QR codes from embedded page images (GD-based PHP package).
-     *
-     * @return list<array{type: string, data: string}>
-     */
-    private function extractQrFromPageObjects(object $page, string $workDir, int $pageNumber): array
-    {
-        if (!\function_exists('imagecreatefromstring')) {
-            return [];
-        }
-
-        $codes = [];
-
-        try {
-            $xObjects = method_exists($page, 'getXObjects') ? $page->getXObjects() : [];
-        } catch (\Throwable) {
-            return [];
-        }
-
-        $index = 0;
-        foreach ($xObjects as $xObject) {
-            ++$index;
-            $content = null;
-
-            if (is_object($xObject) && method_exists($xObject, 'getContent')) {
-                $content = $xObject->getContent();
-            }
-
-            if (!is_string($content) || $content === '') {
+        foreach ($this->methods as $method) {
+            if (!$method->isSupported()) {
                 continue;
             }
 
-            // Only attempt on data that looks like a raster image.
-            if (!str_starts_with($content, "\xFF\xD8") && !str_starts_with($content, "\x89PNG")) {
-                continue;
-            }
-
-            $imagePath = sprintf('%s/xobj-p%d-%d.bin', $workDir, $pageNumber, $index);
-            if (file_put_contents($imagePath, $content) === false) {
+            $anySupported = true;
+            $methodDir = $workDir.'/'.$method->getName();
+            if (!is_dir($methodDir) && !mkdir($methodDir, 0775, true) && !is_dir($methodDir)) {
                 continue;
             }
 
             try {
-                $reader = new QrReader($imagePath, QrReader::SOURCE_TYPE_FILE, false);
-                $text = $reader->text();
-                if (is_string($text) && $text !== '') {
-                    $codes[] = [
-                        'type' => 'QR-Code',
-                        'data' => $text,
-                    ];
-                }
+                $found = $method->scan($pdfPath, $methodDir, $maxPages);
             } catch (\Throwable) {
-                // Not a QR image — ignore.
+                continue;
+            }
+
+            foreach ($found as $code) {
+                $key = $code['page'].'|'.$code['type'].'|'.$code['data'];
+                if (isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
+                $merged[] = [
+                    'page' => $code['page'],
+                    'type' => $code['type'],
+                    'data' => $code['data'],
+                    'method' => $code['method'] ?? $method->getName(),
+                ];
             }
         }
 
-        return $codes;
+        if (!$anySupported) {
+            throw new RuntimeException(
+                'No PDF code scan methods are available. Enable imagick and/or install smalot/pdfparser.'
+            );
+        }
+
+        usort(
+            $merged,
+            static fn (array $a, array $b): int => [$a['page'], $a['type'], $a['data']]
+                <=> [$b['page'], $b['type'], $b['data']]
+        );
+
+        return $merged;
     }
 
     private function assertUploadedPdf(UploadedFile $pdf): void
