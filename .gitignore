@@ -1,0 +1,21 @@
+
+###> symfony/framework-bundle ###
+/deploy.php
+/2222
+/.env.local
+/.env.local.php
+/.env.*.local
+/.env-live.local
+/config/secrets/prod/prod.decrypt.private.php
+/public/bundles/
+/var/
+/vendor/
+###< symfony/framework-bundle ###
+
+# Generated PDF archives and temp files (keep directory via .gitkeep)
+/var/storage/archives/*
+!/var/storage/archives/.gitkeep
+/var/storage/tmp/*
+!/var/storage/tmp/.gitkeep
+/var/storage/uploads/*
+!/var/storage/uploads/.gitkeep

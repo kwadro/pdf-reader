@@ -1,0 +1,9 @@
+[2026-09-24 09:13:31] [INFO] Scan started. Directory: /home/igor/home/pdfreader/2222/pdf2
+[2026-09-24 09:13:31] [INFO] Log file: /home/igor/home/pdfreader/public/scan.log
+[2026-09-24 09:13:31] [INFO] Recursive: yes (all nested folders)
+[2026-09-24 09:13:31] [INFO] Limit per nested subdirectory: 2 (root folder unlimited)
+[2026-09-24 09:13:31] [INFO] Max pages per PDF: 2
+[2026-09-24 09:13:31] [DIR] /home/igor/home/pdfreader/2222/pdf2 (1 file(s), root)
+[2026-09-24 09:13:31] [FILE] /home/igor/home/pdfreader/2222/pdf2/1.pdf
+[2026-09-24 09:13:32] [CODE] page=1 type=I2/5 data=006267256300115741008000
+[2026-09-24 09:13:32] [INFO] Done. directories=1 files=1 codes=1 errors=0
