@@ -2,6 +2,8 @@
 
 Symfony 7.4 (PHP ≥ 8.2) API for scanning QR/barcodes in PDF files and splitting PDFs into per-page ZIP archives.
 
+Magento 2 module with the same features: [`magento/Sinartis/PdfReader`](magento/Sinartis/PdfReader) (`Sinartis_PdfReader`).
+
 ## Requirements
 
 - PHP 8.2+

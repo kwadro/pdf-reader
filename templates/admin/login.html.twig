@@ -1,0 +1,37 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Admin — Sign in{% endblock %}
+
+{% block stylesheets %}
+{% include 'admin/_styles.html.twig' %}
+{% endblock %}
+
+{% block body %}
+<div class="admin">
+    <h1>Sign in</h1>
+    <p class="lead">API admin panel. Allowed IP and password are required.</p>
+
+    {% if not password_configured %}
+        <div class="flash err">Password is not configured. Set <code>ADMIN_PASSWORD</code> in <code>.env</code>.</div>
+    {% endif %}
+
+    {% if error %}
+        <div class="flash err">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" class="panel" autocomplete="off">
+        <label class="field">
+            <span>Password</span>
+            <input type="password" name="password" required autofocus {% if not password_configured %}disabled{% endif %}>
+        </label>
+
+        <div class="actions">
+            <button type="submit" class="primary" {% if not password_configured %}disabled{% endif %}>Sign in</button>
+        </div>
+
+        <div class="meta">
+            Your IP: <code>{{ client_ip|default('—') }}</code>
+        </div>
+    </form>
+</div>
+{% endblock %}

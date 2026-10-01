@@ -1,0 +1,92 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Admin — API settings{% endblock %}
+
+{% block stylesheets %}
+{% include 'admin/_styles.html.twig' %}
+{% endblock %}
+
+{% block body %}
+<div class="admin">
+    <div class="admin-top">
+        <h1>API settings</h1>
+        <a class="btn secondary" href="{{ path('admin_logout') }}">Sign out</a>
+    </div>
+    <p class="lead">Access and scan-method settings for /api.</p>
+
+    {% if saved %}
+        <div class="flash ok">Saved.</div>
+    {% endif %}
+    {% if error %}
+        <div class="flash err">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" class="panel" autocomplete="off">
+        <label class="check" style="margin-bottom: 1.15rem;">
+            <input type="checkbox" name="api_enabled" value="1" {% if settings.api_enabled %}checked{% endif %}>
+            API enabled
+        </label>
+
+        <label class="field">
+            <span>Access token</span>
+            <div class="row">
+                <input type="text" name="api_access_token" value="{{ settings.api_access_token }}" placeholder="empty = token from .env" spellcheck="false">
+                <button type="submit" name="generate_token" value="1" class="secondary">Generate</button>
+            </div>
+            <span class="hint">If empty, <code>API_ACCESS_TOKEN</code> from .env is used.</span>
+        </label>
+
+        <div class="field" style="margin-bottom: 1.15rem;">
+            <span class="field-label">Code scan methods</span>
+            {% for method in available_methods %}
+                <label class="check">
+                    <input type="checkbox" name="enabled_scan_methods[]" value="{{ method }}"
+                        {% if method in settings.enabled_scan_methods %}checked{% endif %}>
+                    {{ method }}
+                    {% if method in supported_methods %}
+                        <span class="badge on">available</span>
+                    {% else %}
+                        <span class="badge">unavailable on server</span>
+                    {% endif %}
+                </label>
+            {% endfor %}
+        </div>
+
+        <label class="field">
+            <span>Extra admin IPs</span>
+            <textarea name="admin_allowed_ips" placeholder="one IP or CIDR per line, e.g. 203.0.113.10">{{ settings.admin_allowed_ips|join("\n") }}</textarea>
+            <span class="hint">
+                Added to the list from <code>ADMIN_ALLOWED_IPS</code> in .env.
+                {% if env_allowed_ips %}
+                    From .env: <code>{{ env_allowed_ips|join(', ') }}</code>.
+                {% else %}
+                    .env list is empty.
+                {% endif %}
+                Password is only in <code>ADMIN_PASSWORD</code> (.env).
+            </span>
+        </label>
+
+        <div class="actions">
+            <button type="submit" class="primary">Save</button>
+        </div>
+
+        <div class="meta">
+            Your IP: <code>{{ client_ip|default('—') }}</code><br>
+            Effective whitelist:
+            {% if effective_allowed_ips %}
+                <code>{{ effective_allowed_ips|join(', ') }}</code>
+            {% else %}
+                <em>empty — access denied</em>
+            {% endif %}
+            <br>
+            Active token:
+            {% if effective_token %}
+                <code>{{ effective_token|slice(0, 6) }}…{{ effective_token|slice(-4) }}</code>
+                ({{ effective_token|length }} chars)
+            {% else %}
+                <em>not set</em>
+            {% endif %}
+        </div>
+    </form>
+</div>
+{% endblock %}
