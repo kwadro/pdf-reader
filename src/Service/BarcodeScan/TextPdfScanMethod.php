@@ -77,6 +77,23 @@ final class TextPdfScanMethod implements PdfCodeScanMethodInterface
 
         $text = str_replace(["\xFE\xFF", "\xFF\xFE"], '', $text);
 
+        // Some FPDF/CID extracts store digits as 0x13..0x1C instead of ASCII '0'..'9'
+        // (seen on Ticketcorner print@home PDFs). Map them back so text scanning works
+        // without zbar/imagick on the server.
+        $text = preg_replace_callback(
+            '/[\x13-\x1c]+/',
+            static function (array $m): string {
+                $out = '';
+                $len = strlen($m[0]);
+                for ($i = 0; $i < $len; ++$i) {
+                    $out .= chr(ord('0') + (ord($m[0][$i]) - 0x13));
+                }
+
+                return $out;
+            },
+            $text
+        ) ?? $text;
+
         return trim(preg_replace("/[ \t]+/u", ' ', $text) ?? $text);
     }
 
