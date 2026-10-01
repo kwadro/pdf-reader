@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\EventSubscriber;
 
+use App\Service\AppSettings;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpKernel\Event\RequestEvent;
@@ -12,7 +13,7 @@ use Symfony\Component\HttpKernel\KernelEvents;
 final class AccessTokenSubscriber implements EventSubscriberInterface
 {
     public function __construct(
-        private readonly string $apiAccessToken,
+        private readonly AppSettings $settings,
     ) {
     }
 
@@ -36,9 +37,10 @@ final class AccessTokenSubscriber implements EventSubscriberInterface
             return;
         }
 
+        $expected = $this->settings->getApiAccessToken();
         $token = $this->extractToken($request->headers->get('Authorization'), $request->headers->get('X-Access-Token'));
 
-        if ($token === null || $this->apiAccessToken === '' || !hash_equals($this->apiAccessToken, $token)) {
+        if ($token === null || $expected === '' || !hash_equals($expected, $token)) {
             $event->setResponse(new JsonResponse([
                 'error' => 'Unauthorized',
                 'message' => 'Valid access token is required. Send it via Authorization: Bearer <token> or X-Access-Token header.',
