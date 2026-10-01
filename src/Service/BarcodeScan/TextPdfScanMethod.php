@@ -46,12 +46,42 @@ final class TextPdfScanMethod implements PdfCodeScanMethodInterface
                 $codes[] = $this->withMeta($pageNumber, $code);
             }
 
+            if ($this->hasPrimaryCode($codes)) {
+                break;
+            }
+
             foreach ($this->extractQrFromPageObjects($page, $workDir, $pageNumber) as $code) {
                 $codes[] = $this->withMeta($pageNumber, $code);
             }
+
+            if ($this->hasPrimaryCode($codes)) {
+                break;
+            }
+        }
+
+        if ($this->hasPrimaryCode($codes)) {
+            return array_values(array_filter(
+                $codes,
+                static fn (array $code): bool => in_array($code['type'], ['I2/5', 'QR-Code'], true)
+            ));
         }
 
         return $codes;
+    }
+
+    /**
+     * @param list<array{type: string}> $codes
+     */
+    private function hasPrimaryCode(array $codes): bool
+    {
+        foreach ($codes as $code) {
+            $type = $code['type'] ?? '';
+            if ($type === 'I2/5' || $type === 'QR-Code') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -108,6 +138,11 @@ final class TextPdfScanMethod implements PdfCodeScanMethodInterface
             foreach (array_unique($matches[1]) as $digits) {
                 $codes[] = ['type' => 'I2/5', 'data' => $digits];
             }
+        }
+
+        // Prefer I2/5 — do not collect weaker text matches when barcode is present.
+        if ($codes !== []) {
+            return $codes;
         }
 
         if (preg_match_all('/\b(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\d)[A-Z0-9]{6,16}\b/i', $text, $matches)) {

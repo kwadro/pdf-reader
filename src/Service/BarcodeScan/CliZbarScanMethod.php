@@ -79,9 +79,35 @@ final class CliZbarScanMethod implements PdfCodeScanMethodInterface
                     'method' => $this->getName(),
                 ];
             }
+
+            if ($this->hasPrimaryCode($codes)) {
+                break;
+            }
+        }
+
+        if ($this->hasPrimaryCode($codes)) {
+            return array_values(array_filter(
+                $codes,
+                static fn (array $code): bool => in_array($code['type'], ['I2/5', 'QR-Code'], true)
+            ));
         }
 
         return $codes;
+    }
+
+    /**
+     * @param list<array{type: string}> $codes
+     */
+    private function hasPrimaryCode(array $codes): bool
+    {
+        foreach ($codes as $code) {
+            $type = $code['type'] ?? '';
+            if ($type === 'I2/5' || $type === 'QR-Code') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

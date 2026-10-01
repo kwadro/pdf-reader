@@ -117,12 +117,24 @@ final class PdfBarcodeScanner
                     'method' => $code['method'] ?? $method->getName(),
                 ];
             }
+
+            // I2/5 or QR-Code is enough — skip slower methods (imagick / cli-zbar).
+            if ($this->hasPrimaryCode($merged)) {
+                break;
+            }
         }
 
         if (!$anySupported) {
             throw new RuntimeException(
                 'No PDF code scan methods are available. Enable imagick and/or install smalot/pdfparser.'
             );
+        }
+
+        if ($this->hasPrimaryCode($merged)) {
+            $merged = array_values(array_filter(
+                $merged,
+                static fn (array $code): bool => in_array($code['type'], ['I2/5', 'QR-Code'], true)
+            ));
         }
 
         usort(
@@ -132,6 +144,21 @@ final class PdfBarcodeScanner
         );
 
         return $merged;
+    }
+
+    /**
+     * @param list<array{type: string}> $codes
+     */
+    private function hasPrimaryCode(array $codes): bool
+    {
+        foreach ($codes as $code) {
+            $type = $code['type'] ?? '';
+            if ($type === 'I2/5' || $type === 'QR-Code') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function assertUploadedPdf(UploadedFile $pdf): void
