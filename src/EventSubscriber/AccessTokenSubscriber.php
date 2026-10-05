@@ -37,6 +37,11 @@ final class AccessTokenSubscriber implements EventSubscriberInterface
             return;
         }
 
+        // One-time download links are public; archive is deleted after send.
+        if (preg_match('#^/api/downloads/[a-f0-9]{32}$#', $path) === 1) {
+            return;
+        }
+
         $expected = $this->settings->getApiAccessToken();
         $token = $this->extractToken($request->headers->get('Authorization'), $request->headers->get('X-Access-Token'));
 

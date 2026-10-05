@@ -100,6 +100,7 @@ final class PdfApiController extends AbstractController
             ResponseHeaderBag::DISPOSITION_ATTACHMENT,
             'pages_'.$id.'.zip'
         );
+        $response->deleteFileAfterSend(true);
 
         return $response;
     }
