@@ -10,12 +10,14 @@ use Symfony\Component\HttpFoundation\File\UploadedFile;
 use ZipArchive;
 
 /**
- * Splits PDF pages using Composer packages only (FPDI + FPDF), no qpdf CLI.
+ * Splits PDF pages using Composer packages only (FPDI + FPDF), no qpdf/gs CLI.
+ * Modern PDFs are transferred to classic 1.4 structure before FPDI when needed.
  */
 final class PdfPageSplitter
 {
     public function __construct(
         private readonly string $storageDir,
+        private readonly PdfVersionTransfer $versionTransfer,
     ) {
     }
 
@@ -35,10 +37,18 @@ final class PdfPageSplitter
             }
 
             $pdf->move($workDir, 'input.pdf');
-            $pdfPath = $workDir.'/input.pdf';
+            $sourcePdf = $workDir.'/input.pdf';
+            $pdfPath = $this->versionTransfer->ensureFpdiCompatible($sourcePdf, $workDir);
 
-            $reader = new Fpdi();
-            $pageCount = $reader->setSourceFile($pdfPath);
+            try {
+                $reader = new Fpdi();
+                $pageCount = $reader->setSourceFile($pdfPath);
+            } catch (\Throwable $e) {
+                // Heuristic miss: force transfer and retry once.
+                $pdfPath = $this->versionTransfer->forceToPdf14($sourcePdf, $workDir);
+                $reader = new Fpdi();
+                $pageCount = $reader->setSourceFile($pdfPath);
+            }
 
             if ($pageCount < 1) {
                 throw new RuntimeException('No pages were produced from the PDF.');

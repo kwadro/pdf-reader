@@ -7,6 +7,7 @@
         "php": ">=8.2",
         "ext-ctype": "*",
         "ext-iconv": "*",
+        "drainerlight/php-pdf-decompressor": "^0.1.0",
         "khanamiryan/qrcode-detector-decoder": "^2.0",
         "setasign/fpdf": "^1.9",
         "setasign/fpdi": "^2.6",
