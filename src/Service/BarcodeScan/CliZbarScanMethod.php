@@ -79,35 +79,39 @@ final class CliZbarScanMethod implements PdfCodeScanMethodInterface
                     'method' => $this->getName(),
                 ];
             }
-
-            if ($this->hasPrimaryCode($codes)) {
-                break;
-            }
         }
 
-        if ($this->hasPrimaryCode($codes)) {
-            return array_values(array_filter(
-                $codes,
-                static fn (array $code): bool => in_array($code['type'], ['I2/5', 'QR-Code'], true)
-            ));
-        }
-
-        return $codes;
+        return $this->preferPrimaryCodesPerPage($codes);
     }
 
     /**
-     * @param list<array{type: string}> $codes
+     * @param list<array{page: int, type: string, data: string, method: string}> $codes
+     *
+     * @return list<array{page: int, type: string, data: string, method: string}>
      */
-    private function hasPrimaryCode(array $codes): bool
+    private function preferPrimaryCodesPerPage(array $codes): array
     {
+        $pagesWithPrimary = [];
         foreach ($codes as $code) {
-            $type = $code['type'] ?? '';
-            if ($type === 'I2/5' || $type === 'QR-Code') {
-                return true;
+            if (in_array($code['type'], ['I2/5', 'QR-Code'], true)) {
+                $pagesWithPrimary[$code['page']] = true;
             }
         }
 
-        return false;
+        if ($pagesWithPrimary === []) {
+            return $codes;
+        }
+
+        return array_values(array_filter(
+            $codes,
+            static function (array $code) use ($pagesWithPrimary): bool {
+                if (!isset($pagesWithPrimary[$code['page']])) {
+                    return true;
+                }
+
+                return in_array($code['type'], ['I2/5', 'QR-Code'], true);
+            }
+        ));
     }
 
     /**

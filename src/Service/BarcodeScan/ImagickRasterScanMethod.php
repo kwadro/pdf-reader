@@ -47,8 +47,10 @@ final class ImagickRasterScanMethod implements PdfCodeScanMethodInterface
         $zbarAvailable = $this->commandExists('zbarimg');
 
         foreach ($pageImages as $page => $imagePath) {
+            $pageCodes = [];
+
             foreach ($this->decodeQr($imagePath) as $code) {
-                $codes[] = [
+                $pageCodes[] = [
                     'page' => $page,
                     'type' => $code['type'],
                     'data' => $code['data'],
@@ -58,7 +60,7 @@ final class ImagickRasterScanMethod implements PdfCodeScanMethodInterface
 
             if ($zbarAvailable) {
                 foreach ($this->decodeWithZbar($imagePath) as $code) {
-                    $codes[] = [
+                    $pageCodes[] = [
                         'page' => $page,
                         'type' => $code['type'],
                         'data' => $code['data'],
@@ -67,16 +69,16 @@ final class ImagickRasterScanMethod implements PdfCodeScanMethodInterface
                 }
             }
 
-            if ($this->hasPrimaryCode($codes)) {
-                break;
+            if ($this->hasPrimaryCode($pageCodes)) {
+                $pageCodes = array_values(array_filter(
+                    $pageCodes,
+                    static fn (array $code): bool => in_array($code['type'], ['I2/5', 'QR-Code'], true)
+                ));
             }
-        }
 
-        if ($this->hasPrimaryCode($codes)) {
-            return array_values(array_filter(
-                $codes,
-                static fn (array $code): bool => in_array($code['type'], ['I2/5', 'QR-Code'], true)
-            ));
+            foreach ($pageCodes as $code) {
+                $codes[] = $code;
+            }
         }
 
         return $codes;

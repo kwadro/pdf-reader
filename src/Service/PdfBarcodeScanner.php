@@ -9,7 +9,7 @@ use RuntimeException;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 
 /**
- * Runs multiple detection methods and merges unique codes.
+ * Runs multiple detection methods and merges unique codes for all pages.
  */
 final class PdfBarcodeScanner
 {
@@ -19,6 +19,7 @@ final class PdfBarcodeScanner
     public function __construct(
         private readonly string $storageDir,
         private readonly iterable $methods,
+        private readonly PdfVersionTransfer $versionTransfer,
     ) {
     }
 
@@ -33,8 +34,16 @@ final class PdfBarcodeScanner
 
         try {
             $pdf->move($workDir, 'input.pdf');
+            $sourcePdf = $workDir.'/input.pdf';
+            $pdfPath = $this->versionTransfer->ensureFpdiCompatible($sourcePdf, $workDir);
 
-            return $this->scanPdfPath($workDir.'/input.pdf', $workDir, $maxPages);
+            try {
+                return $this->scanPreparedPdf($pdfPath, $workDir, $maxPages);
+            } catch (\Throwable) {
+                $pdfPath = $this->versionTransfer->forceToPdf14($sourcePdf, $workDir);
+
+                return $this->scanPreparedPdf($pdfPath, $workDir, $maxPages);
+            }
         } finally {
             $this->removeDirectory($workDir);
         }
@@ -57,10 +66,22 @@ final class PdfBarcodeScanner
         $workDir = $this->createWorkDir('barcode');
 
         try {
-            return $this->scanPdfPath($pdfPath, $workDir, $maxPages);
+            $normalized = $this->versionTransfer->ensureFpdiCompatible($pdfPath, $workDir);
+
+            return $this->scanPreparedPdf($normalized, $workDir, $maxPages);
         } finally {
             $this->removeDirectory($workDir);
         }
+    }
+
+    /**
+     * Scan an already prepared (optionally normalized) PDF path. Caller owns $workDir lifetime.
+     *
+     * @return list<array{page: int, type: string, data: string, method: string}>
+     */
+    public function scanPreparedPdf(string $pdfPath, string $workDir, ?int $maxPages = null): array
+    {
+        return $this->scanPdfPath($pdfPath, $workDir, $maxPages);
     }
 
     /**
@@ -117,11 +138,6 @@ final class PdfBarcodeScanner
                     'method' => $code['method'] ?? $method->getName(),
                 ];
             }
-
-            // I2/5 or QR-Code is enough — skip slower methods (imagick / cli-zbar).
-            if ($this->hasPrimaryCode($merged)) {
-                break;
-            }
         }
 
         if (!$anySupported) {
@@ -130,12 +146,7 @@ final class PdfBarcodeScanner
             );
         }
 
-        if ($this->hasPrimaryCode($merged)) {
-            $merged = array_values(array_filter(
-                $merged,
-                static fn (array $code): bool => in_array($code['type'], ['I2/5', 'QR-Code'], true)
-            ));
-        }
+        $merged = $this->preferPrimaryCodesPerPage($merged);
 
         usort(
             $merged,
@@ -147,18 +158,35 @@ final class PdfBarcodeScanner
     }
 
     /**
-     * @param list<array{type: string}> $codes
+     * On each page, if I2/5 or QR-Code exists, drop weaker types for that page only.
+     *
+     * @param list<array{page: int, type: string, data: string, method: string}> $codes
+     *
+     * @return list<array{page: int, type: string, data: string, method: string}>
      */
-    private function hasPrimaryCode(array $codes): bool
+    private function preferPrimaryCodesPerPage(array $codes): array
     {
+        $pagesWithPrimary = [];
         foreach ($codes as $code) {
-            $type = $code['type'] ?? '';
-            if ($type === 'I2/5' || $type === 'QR-Code') {
-                return true;
+            if (in_array($code['type'], ['I2/5', 'QR-Code'], true)) {
+                $pagesWithPrimary[$code['page']] = true;
             }
         }
 
-        return false;
+        if ($pagesWithPrimary === []) {
+            return $codes;
+        }
+
+        return array_values(array_filter(
+            $codes,
+            static function (array $code) use ($pagesWithPrimary): bool {
+                if (!isset($pagesWithPrimary[$code['page']])) {
+                    return true;
+                }
+
+                return in_array($code['type'], ['I2/5', 'QR-Code'], true);
+            }
+        ));
     }
 
     private function assertUploadedPdf(UploadedFile $pdf): void

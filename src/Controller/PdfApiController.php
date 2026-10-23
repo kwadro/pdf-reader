@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
-use App\Service\PdfBarcodeScanner;
+use App\Service\PdfCodesService;
 use App\Service\PdfPageSplitter;
 use RuntimeException;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -20,7 +20,7 @@ use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
 final class PdfApiController extends AbstractController
 {
     public function __construct(
-        private readonly PdfBarcodeScanner $barcodeScanner,
+        private readonly PdfCodesService $codesService,
         private readonly PdfPageSplitter $pageSplitter,
     ) {
     }
@@ -37,7 +37,7 @@ final class PdfApiController extends AbstractController
         }
 
         try {
-            $codes = $this->barcodeScanner->scan($file);
+            $result = $this->codesService->processUpload($file);
         } catch (RuntimeException $e) {
             return $this->json([
                 'error' => 'Processing Error',
@@ -45,9 +45,27 @@ final class PdfApiController extends AbstractController
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
+        $downloads = [];
+        foreach ($result['downloads'] as $archive) {
+            $downloads[] = [
+                'id' => $archive['id'],
+                'pages' => $archive['pages'],
+                'from' => $archive['from'],
+                'to' => $archive['to'],
+                'filename' => $archive['filename'],
+                'download_url' => $this->generateUrl(
+                    'api_download_archive',
+                    ['id' => $archive['id']],
+                    UrlGeneratorInterface::ABSOLUTE_URL
+                ),
+            ];
+        }
+
         return $this->json([
-            'count' => count($codes),
-            'codes' => $codes,
+            'count' => $result['count'],
+            'pages' => $result['pages'],
+            'codes' => $result['codes'],
+            'downloads' => $downloads,
         ]);
     }
 
@@ -80,6 +98,7 @@ final class PdfApiController extends AbstractController
         return $this->json([
             'id' => $result['id'],
             'pages' => $result['pages'],
+            'filename' => $result['filename'],
             'download_url' => $downloadUrl,
         ]);
     }
@@ -95,10 +114,13 @@ final class PdfApiController extends AbstractController
             ], Response::HTTP_NOT_FOUND);
         }
 
+        $downloadName = $this->pageSplitter->getArchiveDownloadName($id);
+        $this->pageSplitter->deleteArchiveMeta($id);
+
         $response = new BinaryFileResponse($path);
         $response->setContentDisposition(
             ResponseHeaderBag::DISPOSITION_ATTACHMENT,
-            'pages_'.$id.'.zip'
+            $downloadName
         );
         $response->deleteFileAfterSend(true);
 

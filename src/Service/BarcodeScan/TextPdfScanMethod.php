@@ -41,29 +41,28 @@ final class TextPdfScanMethod implements PdfCodeScanMethodInterface
                 break;
             }
 
+            $pageCodes = [];
             $text = $this->normalizePdfText($page->getText());
             foreach ($this->extractCodesFromText($text) as $code) {
-                $codes[] = $this->withMeta($pageNumber, $code);
+                $pageCodes[] = $this->withMeta($pageNumber, $code);
             }
 
-            if ($this->hasPrimaryCode($codes)) {
-                break;
+            if (!$this->hasPrimaryCode($pageCodes)) {
+                foreach ($this->extractQrFromPageObjects($page, $workDir, $pageNumber) as $code) {
+                    $pageCodes[] = $this->withMeta($pageNumber, $code);
+                }
             }
 
-            foreach ($this->extractQrFromPageObjects($page, $workDir, $pageNumber) as $code) {
-                $codes[] = $this->withMeta($pageNumber, $code);
+            if ($this->hasPrimaryCode($pageCodes)) {
+                $pageCodes = array_values(array_filter(
+                    $pageCodes,
+                    static fn (array $code): bool => in_array($code['type'], ['I2/5', 'QR-Code'], true)
+                ));
             }
 
-            if ($this->hasPrimaryCode($codes)) {
-                break;
+            foreach ($pageCodes as $code) {
+                $codes[] = $code;
             }
-        }
-
-        if ($this->hasPrimaryCode($codes)) {
-            return array_values(array_filter(
-                $codes,
-                static fn (array $code): bool => in_array($code['type'], ['I2/5', 'QR-Code'], true)
-            ));
         }
 
         return $codes;
