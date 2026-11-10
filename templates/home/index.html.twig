@@ -9,6 +9,8 @@
         <nav class="top-nav" aria-label="Primary">
             <a href="#capabilities">Можливості</a>
             <a href="#api">API</a>
+            <a href="{{ path('split') }}">Split PDF</a>
+            <a href="{{ path('merge') }}">Merge PDFs</a>
         </nav>
     </header>
 
@@ -116,12 +118,30 @@
             <p class="eyebrow">Можливість 02</p>
             <h2 id="cap-split">Кожна сторінка — окремий файл</h2>
             <p>Завантажуєте багатосторінковий PDF і отримуєте посилання на ZIP-архів, де кожна сторінка збережена окремо — зручно для масової обробки й перевірок.</p>
+            <p class="capability-cta"><a class="btn btn-ghost" href="{{ path('split') }}">Open Split page</a></p>
+        </div>
+    </section>
+
+    <section class="capability" aria-labelledby="cap-merge">
+        <div class="capability-copy">
+            <p class="eyebrow">Можливість 03</p>
+            <h2 id="cap-merge">ZIP сторінок — назад в один PDF</h2>
+            <p>Завантажуєте архів з окремими PDF-файлами — отримуєте один багатосторінковий документ у правильному порядку.</p>
+            <p class="capability-cta"><a class="btn btn-ghost" href="{{ path('merge') }}">Open Merge page</a></p>
+        </div>
+        <div class="capability-panel panel-codes" aria-hidden="true">
+            <div class="split-stack">
+                <span>1.pdf</span>
+                <span>2.pdf</span>
+                <span>3.pdf</span>
+                <strong>merged.pdf</strong>
+            </div>
         </div>
     </section>
 
     <section class="api" id="api" aria-labelledby="api-heading">
         <p class="eyebrow">Доступ</p>
-        <h2 id="api-heading">Дві захищені точки API</h2>
+        <h2 id="api-heading">Захищені точки API</h2>
         <p class="api-lead">Усі запити перевіряють access token з конфігурації сервера.</p>
 
         <div class="api-grid">
@@ -132,6 +152,10 @@
             <article>
                 <h3><code>POST /api/pdf/split</code></h3>
                 <p>Приймає PDF, повертає URL для завантаження ZIP зі сторінками.</p>
+            </article>
+            <article>
+                <h3><code>POST /api/pdf/merge</code></h3>
+                <p>Приймає ZIP з PDF-файлами, повертає URL одного багатосторінкового PDF.</p>
             </article>
         </div>
     </section>

@@ -1,0 +1,85 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Split PDF — PdfReader{% endblock %}
+
+{% block meta_description %}Upload a PDF, split every page into a separate file, and download a ZIP archive.{% endblock %}
+
+{% block stylesheets %}
+<link rel="stylesheet" href="{{ asset('css/split.css') }}">
+{% endblock %}
+
+{% block body %}
+<div class="page split-page"
+     data-api-url="{{ api_split_url }}"
+     data-max-bytes="{{ max_upload_bytes }}">
+    <header class="top">
+        <a class="brand-mark" href="{{ path('home') }}" aria-label="PdfReader home">PdfReader</a>
+        <nav class="top-nav" aria-label="Primary">
+            <a href="{{ path('home') }}">Home</a>
+            <a href="{{ path('split') }}" aria-current="page">Split PDF</a>
+            <a href="{{ path('merge') }}">Merge PDFs</a>
+        </nav>
+    </header>
+
+    <main class="split-main">
+        <p class="brand-hero split-brand">PdfReader</p>
+        <h1>Split PDF into pages</h1>
+        <p class="split-lead">Drop a PDF (up to 200&nbsp;MB). We pack each page into a ZIP and give you a download link.</p>
+
+        <form class="split-form" id="split-form" novalidate>
+            <label class="token-field">
+                <span>Access token</span>
+                <input type="password" id="access-token" name="token" autocomplete="off" spellcheck="false" placeholder="Bearer / X-Access-Token" required>
+            </label>
+
+            <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-controls="file-input" aria-label="Choose or drop a PDF file">
+                <input type="file" id="file-input" name="file" accept="application/pdf,.pdf" hidden>
+                <div class="dropzone-idle" id="dropzone-idle">
+                    <strong>Drag &amp; drop your PDF here</strong>
+                    <span>or click to browse · max 200&nbsp;MB</span>
+                </div>
+                <div class="dropzone-file is-hidden" id="dropzone-file" aria-live="polite">
+                    <strong id="file-name"></strong>
+                    <span id="file-size"></span>
+                    <button type="button" class="link-btn" id="clear-file">Choose another</button>
+                </div>
+            </div>
+
+            <div class="progress-block is-hidden" id="upload-progress-block" aria-live="polite">
+                <div class="progress-label">
+                    <span>Uploading</span>
+                    <span id="upload-percent">0%</span>
+                </div>
+                <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="upload-bar">
+                    <div class="progress-fill" id="upload-fill"></div>
+                </div>
+            </div>
+
+            <div class="process-block is-hidden" id="process-block" aria-live="polite">
+                <div class="spinner" aria-hidden="true"></div>
+                <div>
+                    <strong>Preparing archive…</strong>
+                    <span>Splitting pages and building the ZIP. This may take a while for large files.</span>
+                </div>
+            </div>
+
+            <p class="form-error is-hidden" id="form-error" role="alert"></p>
+
+            <div class="result-block is-hidden" id="result-block" aria-live="polite">
+                <p class="result-title">Archive ready</p>
+                <p class="result-meta" id="result-meta"></p>
+                <a class="btn btn-primary" id="download-link" href="#" download>Download ZIP</a>
+                <p class="result-url"><a id="download-url-text" href="#" target="_blank" rel="noopener"></a></p>
+            </div>
+
+            <div class="split-actions">
+                <button type="submit" class="btn btn-primary" id="split-btn" disabled>Split</button>
+            </div>
+        </form>
+    </main>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+<script src="{{ asset('js/split.js') }}" defer></script>
+{% endblock %}

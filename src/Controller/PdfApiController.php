@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Service\PdfCodesService;
+use App\Service\PdfPageMerger;
 use App\Service\PdfPageSplitter;
 use App\Service\PdfBarcodeScanner;
 use RuntimeException;
@@ -20,9 +21,12 @@ use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
 #[Route('/api')]
 final class PdfApiController extends AbstractController
 {
+    private const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
+
     public function __construct(
         private readonly PdfCodesService $codesService,
         private readonly PdfPageSplitter $pageSplitter,
+        private readonly PdfPageMerger $pageMerger,
         private readonly PdfBarcodeScanner $barcodeScanner
     ) {
     }
@@ -89,6 +93,13 @@ final class PdfApiController extends AbstractController
             ], Response::HTTP_BAD_REQUEST);
         }
 
+        if ($file->getSize() !== null && $file->getSize() > self::MAX_UPLOAD_BYTES) {
+            return $this->json([
+                'error' => 'Bad Request',
+                'message' => 'File is too large. Maximum size is 200 MB.',
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
         try {
             $result = $this->pageSplitter->splitToArchive($file);
         } catch (RuntimeException $e) {
@@ -112,19 +123,68 @@ final class PdfApiController extends AbstractController
         ]);
     }
 
+    #[Route('/pdf/merge', name: 'api_pdf_merge', methods: ['POST'])]
+    public function mergePages(Request $request): JsonResponse
+    {
+        $file = $request->files->get('file') ?? $request->files->get('archive') ?? $request->files->get('zip');
+        if ($file === null) {
+            return $this->json([
+                'error' => 'Bad Request',
+                'message' => 'Multipart field "file" (or "archive" / "zip") with a ZIP of PDFs is required.',
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        if ($file->getSize() !== null && $file->getSize() > self::MAX_UPLOAD_BYTES) {
+            return $this->json([
+                'error' => 'Bad Request',
+                'message' => 'File is too large. Maximum size is 200 MB.',
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        try {
+            $result = $this->pageMerger->mergeArchiveToPdf($file);
+        } catch (RuntimeException $e) {
+            return $this->json([
+                'error' => 'Processing Error',
+                'message' => $e->getMessage(),
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $downloadUrl = $this->generateUrl(
+            'api_download_archive',
+            ['id' => $result['id']],
+            UrlGeneratorInterface::ABSOLUTE_URL
+        );
+
+        return $this->json([
+            'id' => $result['id'],
+            'pages' => $result['pages'],
+            'files' => $result['files'],
+            'filename' => $result['filename'],
+            'download_url' => $downloadUrl,
+        ]);
+    }
+
     #[Route('/downloads/{id}', name: 'api_download_archive', methods: ['GET'], requirements: ['id' => '[a-f0-9]{32}'])]
     public function downloadArchive(string $id): Response
     {
         $path = $this->pageSplitter->getArchivePath($id);
-        if ($path === null) {
-            return $this->json([
-                'error' => 'Not Found',
-                'message' => 'Archive not found.',
-            ], Response::HTTP_NOT_FOUND);
-        }
+        $downloadName = null;
 
-        $downloadName = $this->pageSplitter->getArchiveDownloadName($id);
-        $this->pageSplitter->deleteArchiveMeta($id);
+        if ($path !== null) {
+            $downloadName = $this->pageSplitter->getArchiveDownloadName($id);
+            $this->pageSplitter->deleteArchiveMeta($id);
+        } else {
+            $path = $this->pageMerger->getResultPath($id);
+            if ($path === null) {
+                return $this->json([
+                    'error' => 'Not Found',
+                    'message' => 'File not found.',
+                ], Response::HTTP_NOT_FOUND);
+            }
+            $downloadName = $this->pageMerger->getDownloadName($id);
+            $this->pageMerger->deleteMeta($id);
+        }
 
         $response = new BinaryFileResponse($path);
         $response->setContentDisposition(

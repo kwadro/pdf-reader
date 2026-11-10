@@ -43,6 +43,10 @@ services:
         arguments:
             $storageDir: '%app.pdf_storage_dir%'
 
+    App\Service\PdfPageMerger:
+        arguments:
+            $storageDir: '%app.pdf_storage_dir%'
+
     App\Service\PdfCodesService:
         arguments:
             $storageDir: '%app.pdf_storage_dir%'

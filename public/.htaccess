@@ -5,6 +5,26 @@
 # Use the front controller as index file.
 DirectoryIndex index.php
 
+# Allow PDF uploads up to 200 MB for /api/pdf/split and the Split page.
+<IfModule mod_php.c>
+    php_value upload_max_filesize 200M
+    php_value post_max_size 210M
+    php_value max_execution_time 600
+    php_value max_input_time 600
+</IfModule>
+<IfModule mod_php7.c>
+    php_value upload_max_filesize 200M
+    php_value post_max_size 210M
+    php_value max_execution_time 600
+    php_value max_input_time 600
+</IfModule>
+<IfModule mod_php8.c>
+    php_value upload_max_filesize 200M
+    php_value post_max_size 210M
+    php_value max_execution_time 600
+    php_value max_input_time 600
+</IfModule>
+
 # Uncomment the following line if you install assets as symlinks or if you
 # experience problems related to symlinks when compiling LESS/Sass/CoffeScript.
 # Options +FollowSymlinks

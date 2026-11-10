@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Service\BarcodeScan;
 
+use GdImage;
+
 /**
  * Lightweight 1D barcode reader (CODE-128 + Interleaved 2 of 5) using GD only.
  * Used when zbarimg is not available on the host.
@@ -58,11 +60,11 @@ final class PurePhp1dBarcodeDecoder
     }
 
     /**
-     * @param \GdImage $img
+     * @param GdImage $img
      *
      * @return list<array{type: string, data: string}>
      */
-    public function decodeImage(\GdImage $img): array
+    public function decodeImage(GdImage $img): array
     {
         $width = imagesx($img);
         $height = imagesy($img);
@@ -122,7 +124,7 @@ final class PurePhp1dBarcodeDecoder
      *
      * @return list<int>
      */
-    private function candidateRows(\GdImage $img, int $width, int $height): array
+    private function candidateRows(GdImage $img, int $width, int $height): array
     {
         $step = max(1, intdiv($height, 400));
         $bands = 6;
@@ -160,7 +162,7 @@ final class PurePhp1dBarcodeDecoder
             }
         }
 
-        $list = array_map('intval', array_keys($picked));
+        $list = array_map('interval', array_keys($picked));
         sort($list);
 
         return $list;
@@ -169,7 +171,7 @@ final class PurePhp1dBarcodeDecoder
     /**
      * @return list<int>
      */
-    private function rowRuns(\GdImage $img, int $width, int $y, int $threshold, bool $invert): array
+    private function rowRuns(GdImage $img, int $width, int $y, int $threshold, bool $invert): array
     {
         $bits = [];
         for ($x = 0; $x < $width; ++$x) {
@@ -210,7 +212,7 @@ final class PurePhp1dBarcodeDecoder
         return count($runs) >= 20 ? array_values($runs) : [];
     }
 
-    private function isBlack(\GdImage $img, int $x, int $y, int $threshold): bool
+    private function isBlack(GdImage $img, int $x, int $y, int $threshold): bool
     {
         $rgb = imagecolorat($img, $x, $y);
         $r = ($rgb >> 16) & 0xFF;

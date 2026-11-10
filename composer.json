@@ -27,7 +27,8 @@
         "symfony/yaml": "7.4.*",
         "twig/extra-bundle": "^2.12|^3.29",
         "twig/twig": "^2.12|^3.30",
-        "ext-imagick": "*"
+        "ext-imagick": "*",
+        "ext-gd": "*"
     },
     "config": {
         "allow-plugins": {
