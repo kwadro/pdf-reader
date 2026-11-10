@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Service;
 
 use App\Service\BarcodeScan\PdfCodeScanMethodInterface;
+use App\Service\BarcodeScan\PurePhp1dBarcodeDecoder;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\Process\Process;
@@ -305,8 +306,13 @@ final class PdfBarcodeScanner
             }
         }
 
+        $anySupported = true;
+        foreach ((new PurePhp1dBarcodeDecoder())->decodeFile($imagePath) as $code) {
+            $this->pushImageCode($merged, $seen, $code['type'], $code['data'], 'php-1d');
+        }
+
         if (!$anySupported) {
-            throw new RuntimeException('No image barcode decoder is available. Install zbarimg.');
+            throw new RuntimeException('No image barcode decoder is available.');
         }
 
         return $merged;

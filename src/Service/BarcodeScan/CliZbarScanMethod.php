@@ -8,7 +8,7 @@ use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 use Symfony\Component\Process\Process;
 
 /**
- * Method 3: classic CLI pipeline (pdftoppm + zbarimg) when both tools exist.
+ * Method 3: rasterize PDF with pdftoppm, then decode via zbarimg and/or pure PHP.
  */
 #[AutoconfigureTag('app.pdf_code_scan_method', ['priority' => 10])]
 final class CliZbarScanMethod implements PdfCodeScanMethodInterface
@@ -20,7 +20,8 @@ final class CliZbarScanMethod implements PdfCodeScanMethodInterface
 
     public function isSupported(): bool
     {
-        return $this->commandExists('pdftoppm') && $this->commandExists('zbarimg');
+        // pdftoppm alone is enough — 1D codes can be read with the pure-PHP decoder.
+        return $this->commandExists('pdftoppm');
     }
 
     public function scan(string $pdfPath, string $workDir, ?int $maxPages = null): array
@@ -55,33 +56,77 @@ final class CliZbarScanMethod implements PdfCodeScanMethodInterface
         $images = glob($imagesDir.'/page-*.png') ?: [];
         natsort($images);
 
+        $zbarAvailable = $this->commandExists('zbarimg');
+        $phpDecoder = new PurePhp1dBarcodeDecoder();
         $codes = [];
+
         foreach ($images as $imagePath) {
             $page = 0;
             if (preg_match('/page-(\d+)\.png$/', (string) $imagePath, $matches) === 1) {
                 $page = (int) $matches[1];
             }
 
-            $zbar = new Process(['zbarimg', '--quiet', '-S*.enable', (string) $imagePath]);
-            $zbar->setTimeout(90);
-            $zbar->run();
-
-            $exitCode = $zbar->getExitCode();
-            if (!$zbar->isSuccessful() && !in_array($exitCode, [1, 4], true)) {
-                continue;
-            }
-
-            foreach ($this->parseZbarOutput($zbar->getOutput()) as $code) {
-                $codes[] = [
+            $pageCodes = [];
+            $seen = [];
+            $push = function (string $type, string $data) use (&$pageCodes, &$seen, $page): void {
+                if ($data === '') {
+                    return;
+                }
+                $key = $type.'|'.$data;
+                if (isset($seen[$key])) {
+                    return;
+                }
+                $seen[$key] = true;
+                $pageCodes[] = [
                     'page' => $page,
-                    'type' => $this->normalizeBarcodeType($code['type'], $code['data']),
-                    'data' => $code['data'],
+                    'type' => $type,
+                    'data' => $data,
                     'method' => $this->getName(),
                 ];
+            };
+
+            if ($zbarAvailable) {
+                $zbar = new Process(['zbarimg', '--quiet', '-S*.enable', (string) $imagePath]);
+                $zbar->setTimeout(90);
+                $zbar->run();
+
+                $exitCode = $zbar->getExitCode();
+                if ($zbar->isSuccessful() || in_array($exitCode, [1, 4], true)) {
+                    foreach ($this->parseZbarOutput($zbar->getOutput()) as $code) {
+                        $push(
+                            $this->normalizeBarcodeType($code['type'], $code['data']),
+                            $code['data']
+                        );
+                    }
+                }
+            }
+
+            if (!$this->pageHasPrimary($pageCodes)) {
+                foreach ($phpDecoder->decodeFile((string) $imagePath) as $code) {
+                    $push($code['type'], $code['data']);
+                }
+            }
+
+            foreach ($pageCodes as $code) {
+                $codes[] = $code;
             }
         }
 
         return $this->preferPrimaryCodesPerPage($codes);
+    }
+
+    /**
+     * @param list<array{type: string}> $codes
+     */
+    private function pageHasPrimary(array $codes): bool
+    {
+        foreach ($codes as $code) {
+            if (in_array($code['type'], ['I2/5', 'QR-Code'], true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function normalizeBarcodeType(string $type, string $data): string

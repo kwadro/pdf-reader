@@ -46,31 +46,50 @@ final class ImagickRasterScanMethod implements PdfCodeScanMethodInterface
 
         $codes = [];
         $zbarAvailable = $this->commandExists('zbarimg');
+        $phpDecoder = new PurePhp1dBarcodeDecoder();
 
         foreach ($pageImages as $page => $imagePath) {
             $pageCodes = [];
+            $seen = [];
 
-            foreach ($this->decodeQr($imagePath) as $code) {
+            $push = function (string $type, string $data) use (&$pageCodes, &$seen, $page): void {
+                if ($data === '') {
+                    return;
+                }
+                $key = $type.'|'.$data;
+                if (isset($seen[$key])) {
+                    return;
+                }
+                $seen[$key] = true;
                 $pageCodes[] = [
                     'page' => $page,
-                    'type' => $code['type'],
-                    'data' => $code['data'],
+                    'type' => $type,
+                    'data' => $data,
                     'method' => $this->getName(),
                 ];
+            };
+
+            foreach ($this->decodeQr($imagePath) as $code) {
+                $push($code['type'], $code['data']);
             }
 
             if ($zbarAvailable) {
                 foreach ($this->decodeWithZbar($imagePath) as $code) {
-                    $pageCodes[] = [
-                        'page' => $page,
-                        'type' => $this->normalizeBarcodeType($code['type'], $code['data']),
-                        'data' => $code['data'],
-                        'method' => $this->getName(),
-                    ];
+                    $push(
+                        $this->normalizeBarcodeType($code['type'], $code['data']),
+                        $code['data']
+                    );
                 }
             }
 
-            if (true || $this->hasPrimaryCode($pageCodes)) {
+            // Hosting often has Imagick but no zbarimg — decode 1D barcodes in pure PHP.
+            if (!$this->hasPrimaryCode($pageCodes)) {
+                foreach ($phpDecoder->decodeFile($imagePath) as $code) {
+                    $push($code['type'], $code['data']);
+                }
+            }
+
+            if ($this->hasPrimaryCode($pageCodes)) {
                 $pageCodes = array_values(array_filter(
                     $pageCodes,
                     static fn (array $code): bool => in_array($code['type'], ['I2/5', 'QR-Code'], true)
