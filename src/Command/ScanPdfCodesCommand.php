@@ -22,7 +22,7 @@ use Symfony\Component\Finder\SplFileInfo;
 )]
 final class ScanPdfCodesCommand extends Command
 {
-    private const TEST_MAX_PAGES = 2;
+    private const TEST_MAX_PAGES = 1;
 
     public function __construct(
         private readonly PdfBarcodeScanner $barcodeScanner,
@@ -39,7 +39,7 @@ final class ScanPdfCodesCommand extends Command
                 'limit',
                 'l',
                 InputOption::VALUE_REQUIRED,
-                'Max PDF files per nested subdirectory only (root path is never limited). Also limits each PDF to first 2 pages.',
+                'Max PDF files per nested subdirectory only (root path is never limited). Also limits each PDF to first 1 page.',
                 null
             );
     }

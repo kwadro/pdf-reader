@@ -152,17 +152,19 @@ final class TextPdfScanMethod implements PdfCodeScanMethodInterface
                 if (preg_match('/^\d+$/', $value)) {
                     continue;
                 }
+                if ($this->isWebAddressCode($value)) {
+                    continue;
+                }
                 $codes[] = ['type' => 'TEXT-CODE', 'data' => strtoupper($value)];
             }
         }
 
-        if (preg_match_all('#https?://[^\s<>"\']+#i', $text, $matches)) {
-            foreach (array_unique($matches[0]) as $url) {
-                $codes[] = ['type' => 'URL', 'data' => rtrim($url, '.,);')];
-            }
-        }
-
         return $codes;
+    }
+
+    private function isWebAddressCode(string $value): bool
+    {
+        return preg_match('#^(https?://|www\.)#i', trim($value)) === 1;
     }
 
     private function isTrivialDigitCode(string $digits): bool

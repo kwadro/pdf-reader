@@ -119,6 +119,9 @@ final class PdfBarcodeScanner
             }
 
             foreach ($found as $code) {
+                if ($this->isWebAddressCode($code['data'])) {
+                    continue;
+                }
                 $type = $this->normalizeBarcodeType($code['type'], $code['data']);
                 $key = $code['page'].'|'.$type.'|'.$code['data'];
                 if (isset($seen[$key])) {
@@ -217,6 +220,11 @@ final class PdfBarcodeScanner
         return $type;
     }
 
+    private function isWebAddressCode(string $data): bool
+    {
+        return preg_match('#^(https?://|www\.)#i', trim($data)) === 1;
+    }
+
     /**
      * @param list<array{type: string}> $codes
      */
@@ -310,7 +318,7 @@ final class PdfBarcodeScanner
      */
     private function pushImageCode(array &$merged, array &$seen, string $type, string $data, string $method): void
     {
-        if ($data === '') {
+        if ($data === '' || $this->isWebAddressCode($data)) {
             return;
         }
 
