@@ -1,13 +1,13 @@
 
 ###> symfony/framework-bundle ###
 /.idea
-/deploy.php
-/.env.dev
-/.env
-/.env.local
-/.env.local.php
-/.env.*.local
-/.env-live.local
+deploy.php
+.env.dev
+.env
+.env.local
+.env.local.php
+.env.*.local
+.env-live.local
 /config/secrets/prod/prod.decrypt.private.php
 /public/bundles/
 /var/
