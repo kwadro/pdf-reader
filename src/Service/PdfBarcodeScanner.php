@@ -7,19 +7,32 @@ namespace App\Service;
 use App\Service\BarcodeScan\PdfCodeScanMethodInterface;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
+use Symfony\Component\Process\Process;
+use Zxing\QrReader;
 
 /**
- * Runs multiple detection methods and merges unique codes for all pages.
+ * Runs multiple detection methods and merges unique codes.
  */
 final class PdfBarcodeScanner
 {
+    private const IMAGE_MIMES = [
+        'image/jpeg',
+        'image/png',
+        'image/gif',
+        'image/webp',
+        'image/bmp',
+        'image/x-ms-bmp',
+        'image/tiff',
+    ];
+
+    private const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff'];
+
     /**
      * @param iterable<PdfCodeScanMethodInterface> $methods
      */
     public function __construct(
         private readonly string $storageDir,
         private readonly iterable $methods,
-        private readonly PdfVersionTransfer $versionTransfer,
     ) {
     }
 
@@ -34,16 +47,8 @@ final class PdfBarcodeScanner
 
         try {
             $pdf->move($workDir, 'input.pdf');
-            $sourcePdf = $workDir.'/input.pdf';
-            $pdfPath = $this->versionTransfer->ensureFpdiCompatible($sourcePdf, $workDir);
 
-            try {
-                return $this->scanPreparedPdf($pdfPath, $workDir, $maxPages);
-            } catch (\Throwable) {
-                $pdfPath = $this->versionTransfer->forceToPdf14($sourcePdf, $workDir);
-
-                return $this->scanPreparedPdf($pdfPath, $workDir, $maxPages);
-            }
+            return $this->scanPdfPath($workDir.'/input.pdf', $workDir, $maxPages);
         } finally {
             $this->removeDirectory($workDir);
         }
@@ -66,22 +71,10 @@ final class PdfBarcodeScanner
         $workDir = $this->createWorkDir('barcode');
 
         try {
-            $normalized = $this->versionTransfer->ensureFpdiCompatible($pdfPath, $workDir);
-
-            return $this->scanPreparedPdf($normalized, $workDir, $maxPages);
+            return $this->scanPdfPath($pdfPath, $workDir, $maxPages);
         } finally {
             $this->removeDirectory($workDir);
         }
-    }
-
-    /**
-     * Scan an already prepared (optionally normalized) PDF path. Caller owns $workDir lifetime.
-     *
-     * @return list<array{page: int, type: string, data: string, method: string}>
-     */
-    public function scanPreparedPdf(string $pdfPath, string $workDir, ?int $maxPages = null): array
-    {
-        return $this->scanPdfPath($pdfPath, $workDir, $maxPages);
     }
 
     /**
@@ -138,6 +131,11 @@ final class PdfBarcodeScanner
                     'method' => $code['method'] ?? $method->getName(),
                 ];
             }
+
+            // I2/5 or QR-Code is enough — skip slower methods (imagick / cli-zbar).
+            if ($this->hasPrimaryCode($merged)) {
+                break;
+            }
         }
 
         if (!$anySupported) {
@@ -146,7 +144,12 @@ final class PdfBarcodeScanner
             );
         }
 
-        $merged = $this->preferPrimaryCodesPerPage($merged);
+        if ($this->hasPrimaryCode($merged)) {
+            $merged = array_values(array_filter(
+                $merged,
+                static fn (array $code): bool => in_array($code['type'], ['I2/5', 'QR-Code'], true)
+            ));
+        }
 
         usort(
             $merged,
@@ -158,35 +161,231 @@ final class PdfBarcodeScanner
     }
 
     /**
-     * On each page, if I2/5 or QR-Code exists, drop weaker types for that page only.
+     * Read barcodes from a raster image (JPEG, PNG, GIF, WebP, BMP, TIFF).
      *
-     * @param list<array{page: int, type: string, data: string, method: string}> $codes
-     *
-     * @return list<array{page: int, type: string, data: string, method: string}>
+     * @return list<array{type: string, data: string, method: string}>
      */
-    private function preferPrimaryCodesPerPage(array $codes): array
+    public function scanImage(UploadedFile $image): array
     {
-        $pagesWithPrimary = [];
+        $this->assertUploadedImage($image);
+
+        $workDir = $this->createWorkDir('image');
+
+        try {
+            $ext = strtolower((string) $image->guessExtension());
+
+            if (!in_array($ext, self::IMAGE_EXTENSIONS, true)) {
+                $ext = 'img';
+            }
+
+            $image->move($workDir, 'input.'.$ext);
+            $path = $workDir.'/input.'.$ext;
+
+            $scanPath = $this->prepareImageForScan($path, $workDir);
+
+            $codes = $this->decodeImageCodes($scanPath);
+            return [$codes, ];
+            if ($codes === [] && $scanPath === $path) {
+                $normalized = $this->prepareImageForScan($path, $workDir, true);
+
+                if ($normalized !== $path) {
+                    $codes = $this->decodeImageCodes($normalized);
+                }
+            }
+
+            usort(
+                $codes,
+                static fn (array $a, array $b): int => [$a['type'], $a['data']] <=> [$b['type'], $b['data']]
+            );
+
+            return $codes;
+        } finally {
+            $this->removeDirectory($workDir);
+        }
+    }
+
+    /**
+     * @param list<array{type: string}> $codes
+     */
+    private function hasPrimaryCode(array $codes): bool
+    {
         foreach ($codes as $code) {
-            if (in_array($code['type'], ['I2/5', 'QR-Code'], true)) {
-                $pagesWithPrimary[$code['page']] = true;
+            $type = $code['type'] ?? '';
+            if ($type === 'I2/5' || $type === 'QR-Code') {
+                return true;
             }
         }
 
-        if ($pagesWithPrimary === []) {
+        return false;
+    }
+
+    private function assertUploadedImage(UploadedFile $image): void
+    {
+        if ($image->getError() !== \UPLOAD_ERR_OK) {
+            throw new RuntimeException('Image upload failed.');
+        }
+
+        $mime = $image->getMimeType() ?? '';
+        $ext = strtolower((string) $image->getClientOriginalExtension());
+
+        if (!in_array($mime, self::IMAGE_MIMES, true) && !in_array($ext, self::IMAGE_EXTENSIONS, true)) {
+            throw new RuntimeException('Uploaded file must be an image (JPEG, PNG, GIF, WebP, BMP, or TIFF).');
+        }
+    }
+
+    private function prepareImageForScan(string $path, string $workDir, bool $force = false): string
+    {
+        $ext = strtolower(pathinfo($path, \PATHINFO_EXTENSION));
+        if (!$force && in_array($ext, ['png', 'jpg', 'jpeg'], true)) {
+            return $path;
+        }
+
+        if (!function_exists('imagecreatefromstring') || !function_exists('imagepng')) {
+            return $path;
+        }
+
+        $binary = file_get_contents($path);
+        if ($binary === false || $binary === '') {
+            return $path;
+        }
+
+        $gd = @imagecreatefromstring($binary);
+        if ($gd === false) {
+            return $path;
+        }
+
+        $out = $workDir.'/scan.png';
+        imagepng($gd, $out);
+        imagedestroy($gd);
+
+        return is_file($out) ? $out : $path;
+    }
+
+    /**
+     * @return list<array{type: string, data: string, method: string}>
+     */
+    private function decodeImageCodes(string $imagePath): array
+    {
+        $merged = [];
+        $seen = [];
+        $anySupported = false;
+
+        if ($this->commandExists('zbarimg')) {
+            $anySupported = true;
+            foreach ($this->decodeWithZbar($imagePath) as $code) {
+                $this->pushImageCode($merged, $seen, $code['type'], $code['data'], 'zbar');
+            }
+        }
+
+        if (class_exists(QrReader::class)) {
+            $anySupported = true;
+            foreach ($this->decodeQr($imagePath) as $code) {
+                $this->pushImageCode($merged, $seen, $code['type'], $code['data'], 'qr-reader');
+            }
+        }
+
+        if (!$anySupported) {
+            throw new RuntimeException('No image barcode decoder is available. Install zbarimg.');
+        }
+
+        return $merged;
+    }
+
+    /**
+     * @param list<array{type: string, data: string, method: string}> $merged
+     * @param array<string, true> $seen
+     */
+    private function pushImageCode(array &$merged, array &$seen, string $type, string $data, string $method): void
+    {
+        if ($data === '') {
+            return;
+        }
+
+        $key = $type.'|'.$data;
+        if (isset($seen[$key])) {
+            return;
+        }
+
+        $seen[$key] = true;
+        $merged[] = [
+            'type' => $type,
+            'data' => $data,
+            'method' => $method,
+        ];
+    }
+
+    /**
+     * @return list<array{type: string, data: string}>
+     */
+    private function decodeWithZbar(string $imagePath): array
+    {
+        $process = new Process(['zbarimg', '--quiet', '-S*.enable', $imagePath]);
+        $process->setTimeout(60);
+        $process->run();
+
+        $exitCode = $process->getExitCode();
+        if (!$process->isSuccessful() && !in_array($exitCode, [1, 4], true)) {
+            return [];
+        }
+
+        return $this->parseZbarOutput($process->getOutput());
+    }
+
+    /**
+     * @return list<array{type: string, data: string}>
+     */
+    private function decodeQr(string $imagePath): array
+    {
+        try {
+            $reader = new QrReader($imagePath, QrReader::SOURCE_TYPE_FILE, false);
+            $text = $reader->text();
+            if (is_string($text) && $text !== '') {
+                return [['type' => 'QR-Code', 'data' => $text]];
+            }
+        } catch (\Throwable) {
+        }
+
+        return [];
+    }
+
+    /**
+     * @return list<array{type: string, data: string}>
+     */
+    private function parseZbarOutput(string $output): array
+    {
+        $codes = [];
+        $output = trim($output);
+        if ($output === '') {
             return $codes;
         }
 
-        return array_values(array_filter(
-            $codes,
-            static function (array $code) use ($pagesWithPrimary): bool {
-                if (!isset($pagesWithPrimary[$code['page']])) {
-                    return true;
-                }
-
-                return in_array($code['type'], ['I2/5', 'QR-Code'], true);
+        foreach (preg_split('/\R/', $output) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
             }
-        ));
+
+            $pos = strpos($line, ':');
+            if ($pos === false) {
+                $codes[] = ['type' => 'UNKNOWN', 'data' => $line];
+                continue;
+            }
+
+            $codes[] = [
+                'type' => substr($line, 0, $pos),
+                'data' => substr($line, $pos + 1),
+            ];
+        }
+
+        return $codes;
+    }
+
+    private function commandExists(string $command): bool
+    {
+        $process = Process::fromShellCommandline('command -v '.escapeshellarg($command));
+        $process->run();
+
+        return $process->isSuccessful() && trim($process->getOutput()) !== '';
     }
 
     private function assertUploadedPdf(UploadedFile $pdf): void

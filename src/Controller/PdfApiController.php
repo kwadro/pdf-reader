@@ -6,6 +6,7 @@ namespace App\Controller;
 
 use App\Service\PdfCodesService;
 use App\Service\PdfPageSplitter;
+use App\Service\PdfBarcodeScanner;
 use RuntimeException;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
@@ -22,6 +23,7 @@ final class PdfApiController extends AbstractController
     public function __construct(
         private readonly PdfCodesService $codesService,
         private readonly PdfPageSplitter $pageSplitter,
+        private readonly PdfBarcodeScanner $barcodeScanner
     ) {
     }
 
@@ -60,12 +62,31 @@ final class PdfApiController extends AbstractController
                 ),
             ];
         }
+    }
+
+    #[Route('/image/codes', name: 'api_image_codes', methods: ['POST'])]
+    public function detectImageCodes(Request $request): JsonResponse
+    {
+        $file = $request->files->get('file') ?? $request->files->get('image');
+        if ($file === null) {
+            return $this->json([
+                'error' => 'Bad Request',
+                'message' => 'Multipart field "file" (or "image") with an image is required.',
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        try {
+            $codes = $this->barcodeScanner->scanImage($file);
+        } catch (RuntimeException $e) {
+            return $this->json([
+                'error' => 'Processing Error',
+                'message' => $e->getMessage(),
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
 
         return $this->json([
-            'count' => $result['count'],
-            'pages' => $result['pages'],
-            'codes' => $result['codes'],
-            'downloads' => $downloads,
+            'count' => count($codes),
+            'codes' => $codes,
         ]);
     }
 
