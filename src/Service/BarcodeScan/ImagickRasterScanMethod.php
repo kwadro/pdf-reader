@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Service\BarcodeScan;
 
 use Imagick;
+use ImagickException;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 use Symfony\Component\Process\Process;
 use Zxing\QrReader;
@@ -62,14 +63,14 @@ final class ImagickRasterScanMethod implements PdfCodeScanMethodInterface
                 foreach ($this->decodeWithZbar($imagePath) as $code) {
                     $pageCodes[] = [
                         'page' => $page,
-                        'type' => $code['type'],
+                        'type' => $this->normalizeBarcodeType($code['type'], $code['data']),
                         'data' => $code['data'],
                         'method' => $this->getName(),
                     ];
                 }
             }
 
-            if ($this->hasPrimaryCode($pageCodes)) {
+            if (true || $this->hasPrimaryCode($pageCodes)) {
                 $pageCodes = array_values(array_filter(
                     $pageCodes,
                     static fn (array $code): bool => in_array($code['type'], ['I2/5', 'QR-Code'], true)
@@ -82,6 +83,15 @@ final class ImagickRasterScanMethod implements PdfCodeScanMethodInterface
         }
 
         return $codes;
+    }
+
+    private function normalizeBarcodeType(string $type, string $data): string
+    {
+        if ($type === 'CODE-128' && $data !== '' && ctype_digit($data)) {
+            return 'I2/5';
+        }
+
+        return $type;
     }
 
     /**
@@ -101,6 +111,7 @@ final class ImagickRasterScanMethod implements PdfCodeScanMethodInterface
 
     /**
      * @return array<int, string> page number => png path
+     * @throws ImagickException
      */
     private function renderPages(string $pdfPath, string $imagesDir, ?int $maxPages): array
     {

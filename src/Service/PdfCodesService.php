@@ -39,36 +39,18 @@ final class PdfCodesService
 
         try {
             $pdf->move($workDir, 'input.pdf');
-            $sourcePdf = $workDir.'/input.pdf';
+            $sourcePdf = $workDir . '/input.pdf';
+
             $pdfPath = $this->versionTransfer->ensureFpdiCompatible($sourcePdf, $workDir);
 
-            try {
-                $pageCount = $this->pageSplitter->countPages($pdfPath);
-            } catch (\Throwable) {
-                $pdfPath = $this->versionTransfer->forceToPdf14($sourcePdf, $workDir);
-                $pageCount = $this->pageSplitter->countPages($pdfPath);
-            }
-
-            $codes = $this->barcodeScanner->scanPreparedPdf($pdfPath, $workDir);
-
-            $downloads = [];
-            if ($pageCount > 1) {
-                $downloads = $this->pageSplitter->createPagedArchives(
-                    $pdfPath,
-                    $originalFilename,
-                    $pageCount,
-                    self::ARCHIVE_PAGE_LIMIT
-                );
-            }
-
+            $codes = $this->barcodeScanner->scanFile($pdfPath, 1);
             return [
+                'originalFilename' => $originalFilename,
                 'count' => count($codes),
-                'pages' => $pageCount,
                 'codes' => $codes,
-                'downloads' => $downloads,
             ];
         } finally {
-            $this->removeDirectory($workDir);
+            //$this->removeDirectory($workDir);
         }
     }
 

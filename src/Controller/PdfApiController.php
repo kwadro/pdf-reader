@@ -40,27 +40,15 @@ final class PdfApiController extends AbstractController
 
         try {
             $result = $this->codesService->processUpload($file);
+            return $this->json([
+                'result' => $result,
+            ], Response::HTTP_OK);
+
         } catch (RuntimeException $e) {
             return $this->json([
                 'error' => 'Processing Error',
                 'message' => $e->getMessage(),
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
-        }
-
-        $downloads = [];
-        foreach ($result['downloads'] as $archive) {
-            $downloads[] = [
-                'id' => $archive['id'],
-                'pages' => $archive['pages'],
-                'from' => $archive['from'],
-                'to' => $archive['to'],
-                'filename' => $archive['filename'],
-                'download_url' => $this->generateUrl(
-                    'api_download_archive',
-                    ['id' => $archive['id']],
-                    UrlGeneratorInterface::ABSOLUTE_URL
-                ),
-            ];
         }
     }
 

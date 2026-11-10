@@ -133,8 +133,11 @@ final class TextPdfScanMethod implements PdfCodeScanMethodInterface
     {
         $codes = [];
 
-        if (preg_match_all('/(?<!\d)(\d{16,48})(?!\d)/', $text, $matches)) {
+        if (preg_match_all('/(?<!\d)(\d{14,48})(?!\d)/', $text, $matches)) {
             foreach (array_unique($matches[1]) as $digits) {
+                if ($this->isTrivialDigitCode($digits)) {
+                    continue;
+                }
                 $codes[] = ['type' => 'I2/5', 'data' => $digits];
             }
         }
@@ -160,6 +163,12 @@ final class TextPdfScanMethod implements PdfCodeScanMethodInterface
         }
 
         return $codes;
+    }
+
+    private function isTrivialDigitCode(string $digits): bool
+    {
+        // Barcode art / placeholders often extract as runs of the same digit (e.g. 111111111111111).
+        return $digits !== '' && preg_match('/^(\d)\1+$/', $digits) === 1;
     }
 
     /**

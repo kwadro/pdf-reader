@@ -119,20 +119,21 @@ final class PdfBarcodeScanner
             }
 
             foreach ($found as $code) {
-                $key = $code['page'].'|'.$code['type'].'|'.$code['data'];
+                $type = $this->normalizeBarcodeType($code['type'], $code['data']);
+                $key = $code['page'].'|'.$type.'|'.$code['data'];
                 if (isset($seen[$key])) {
                     continue;
                 }
                 $seen[$key] = true;
                 $merged[] = [
                     'page' => $code['page'],
-                    'type' => $code['type'],
+                    'type' => $type,
                     'data' => $code['data'],
                     'method' => $code['method'] ?? $method->getName(),
                 ];
             }
 
-            // I2/5 or QR-Code is enough — skip slower methods (imagick / cli-zbar).
+            // Primary barcode is enough — skip slower methods (imagick / cli-zbar).
             if ($this->hasPrimaryCode($merged)) {
                 break;
             }
@@ -202,6 +203,18 @@ final class PdfBarcodeScanner
         } finally {
             $this->removeDirectory($workDir);
         }
+    }
+
+    /**
+     * Numeric CODE-128 ticket barcodes are treated as I2/5 for a stable API.
+     */
+    private function normalizeBarcodeType(string $type, string $data): string
+    {
+        if ($type === 'CODE-128' && $data !== '' && ctype_digit($data)) {
+            return 'I2/5';
+        }
+
+        return $type;
     }
 
     /**
@@ -301,6 +314,7 @@ final class PdfBarcodeScanner
             return;
         }
 
+        $type = $this->normalizeBarcodeType($type, $data);
         $key = $type.'|'.$data;
         if (isset($seen[$key])) {
             return;

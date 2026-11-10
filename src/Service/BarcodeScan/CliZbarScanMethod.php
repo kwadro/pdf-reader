@@ -74,7 +74,7 @@ final class CliZbarScanMethod implements PdfCodeScanMethodInterface
             foreach ($this->parseZbarOutput($zbar->getOutput()) as $code) {
                 $codes[] = [
                     'page' => $page,
-                    'type' => $code['type'],
+                    'type' => $this->normalizeBarcodeType($code['type'], $code['data']),
                     'data' => $code['data'],
                     'method' => $this->getName(),
                 ];
@@ -82,6 +82,15 @@ final class CliZbarScanMethod implements PdfCodeScanMethodInterface
         }
 
         return $this->preferPrimaryCodesPerPage($codes);
+    }
+
+    private function normalizeBarcodeType(string $type, string $data): string
+    {
+        if ($type === 'CODE-128' && $data !== '' && ctype_digit($data)) {
+            return 'I2/5';
+        }
+
+        return $type;
     }
 
     /**
