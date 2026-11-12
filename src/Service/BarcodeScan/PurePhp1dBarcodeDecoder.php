@@ -162,7 +162,7 @@ final class PurePhp1dBarcodeDecoder
             }
         }
 
-        $list = array_map('interval', array_keys($picked));
+        $list = array_map('intval', array_keys($picked));
         sort($list);
 
         return $list;
@@ -320,16 +320,43 @@ final class PurePhp1dBarcodeDecoder
 
         $out = '';
         foreach ($payloadCodes as $code) {
+            // In Code C, 00-99 are digit pairs ("00".."99"). Only 100/101 switch mode.
+            // Treating 99 as "Code C latch" here drops Swiss Post prefixes like "99...".
+            if ($mode === 'C') {
+                if ($code === 100) {
+                    $mode = 'B';
+                    continue;
+                }
+                if ($code === 101) {
+                    $mode = 'A';
+                    continue;
+                }
+                if ($code === 102) {
+                    continue;
+                }
+                if ($code >= 103) {
+                    return null;
+                }
+
+                $out .= str_pad((string) $code, 2, '0', \STR_PAD_LEFT);
+                continue;
+            }
+
+            // Code A / Code B: 99 latches Code C; 100/101 are shifts or FNC4.
             if ($code === 99) {
                 $mode = 'C';
                 continue;
             }
             if ($code === 100) {
-                $mode = 'B';
+                if ($mode === 'A') {
+                    $mode = 'B';
+                }
                 continue;
             }
             if ($code === 101) {
-                $mode = 'A';
+                if ($mode === 'B') {
+                    $mode = 'A';
+                }
                 continue;
             }
             if ($code === 102) {
@@ -337,11 +364,6 @@ final class PurePhp1dBarcodeDecoder
             }
             if ($code >= 103) {
                 return null;
-            }
-
-            if ($mode === 'C') {
-                $out .= str_pad((string) $code, 2, '0', \STR_PAD_LEFT);
-                continue;
             }
 
             if ($mode === 'B') {

@@ -189,7 +189,6 @@ final class PdfBarcodeScanner
             $scanPath = $this->prepareImageForScan($path, $workDir);
 
             $codes = $this->decodeImageCodes($scanPath);
-            return [$codes, ];
             if ($codes === [] && $scanPath === $path) {
                 $normalized = $this->prepareImageForScan($path, $workDir, true);
 
@@ -290,32 +289,75 @@ final class PdfBarcodeScanner
     {
         $merged = [];
         $seen = [];
-        $anySupported = false;
+
+        // Pure-PHP 1D first: low memory and works when zbarimg is missing on hosting.
+        foreach ((new PurePhp1dBarcodeDecoder())->decodeFile($imagePath) as $code) {
+            $this->pushImageCode($merged, $seen, $code['type'], $code['data'], 'php-1d');
+        }
 
         if ($this->commandExists('zbarimg')) {
-            $anySupported = true;
             foreach ($this->decodeWithZbar($imagePath) as $code) {
                 $this->pushImageCode($merged, $seen, $code['type'], $code['data'], 'zbar');
             }
         }
 
-        if (class_exists(QrReader::class)) {
-            $anySupported = true;
+        // Large ticket scans OOM QrReader at 128M; skip when a 1D primary is already found.
+        if (!$this->hasPrimaryCode($merged) && class_exists(QrReader::class)) {
             foreach ($this->decodeQr($imagePath) as $code) {
                 $this->pushImageCode($merged, $seen, $code['type'], $code['data'], 'qr-reader');
             }
         }
 
-        $anySupported = true;
-        foreach ((new PurePhp1dBarcodeDecoder())->decodeFile($imagePath) as $code) {
-            $this->pushImageCode($merged, $seen, $code['type'], $code['data'], 'php-1d');
+        return $this->preferLongerDigitCodes($merged);
+    }
+
+    /**
+     * Drop truncated digit hits that are suffixes/prefixes of a longer valid read
+     * (e.g. Code-C "99" mis-latch → 6008… vs full 9960…).
+     *
+     * @param list<array{type: string, data: string, method: string}> $codes
+     *
+     * @return list<array{type: string, data: string, method: string}>
+     */
+    private function preferLongerDigitCodes(array $codes): array
+    {
+        $digits = [];
+        foreach ($codes as $code) {
+            if (ctype_digit($code['data']) && strlen($code['data']) >= 6) {
+                $digits[] = $code['data'];
+            }
         }
 
-        if (!$anySupported) {
-            throw new RuntimeException('No image barcode decoder is available.');
+        if ($digits === []) {
+            return $codes;
         }
 
-        return $merged;
+        usort($digits, static fn (string $a, string $b): int => strlen($b) <=> strlen($a));
+
+        $filtered = [];
+        foreach ($codes as $code) {
+            $data = $code['data'];
+            if (!ctype_digit($data) || strlen($data) < 6) {
+                $filtered[] = $code;
+                continue;
+            }
+
+            $dominated = false;
+            foreach ($digits as $longer) {
+                if (strlen($longer) <= strlen($data)) {
+                    break;
+                }
+                if (str_contains($longer, $data)) {
+                    $dominated = true;
+                    break;
+                }
+            }
+            if (!$dominated) {
+                $filtered[] = $code;
+            }
+        }
+
+        return $filtered;
     }
 
     /**

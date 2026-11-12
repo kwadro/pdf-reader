@@ -222,6 +222,8 @@
 
         const body = new FormData();
         body.append('file', selectedFile, selectedFile.name);
+        // UI mode: when pages > 100, response ZIP contains chunk archives of 100 pages.
+        body.append('bundle_chunks', '1');
 
         setBusy(true);
         resetProgress();
@@ -251,9 +253,16 @@
 
             const data = xhr.response;
             if (xhr.status >= 200 && xhr.status < 300 && data && data.download_url) {
-                const pages = data.pages != null ? `${data.pages} page${data.pages === 1 ? '' : 's'}` : '';
+                const parts = [];
                 const filename = data.filename || 'archive.zip';
-                resultMeta.textContent = pages ? `${filename} · ${pages}` : filename;
+                parts.push(filename);
+                if (data.pages != null) {
+                    parts.push(`${data.pages} page${data.pages === 1 ? '' : 's'}`);
+                }
+                if (data.archives != null && data.archives > 1) {
+                    parts.push(`${data.archives} zip archives`);
+                }
+                resultMeta.textContent = parts.join(' · ');
                 downloadLink.href = data.download_url;
                 downloadLink.download = filename;
                 downloadUrlText.href = data.download_url;

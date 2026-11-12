@@ -50,7 +50,7 @@ final class PdfCodesService
                 'codes' => $codes,
             ];
         } finally {
-            //$this->removeDirectory($workDir);
+            $this->removeDirectory($workDir);
         }
     }
 

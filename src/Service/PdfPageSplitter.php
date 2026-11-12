@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Service;
 
+use Random\RandomException;
 use RuntimeException;
 use setasign\Fpdi\Fpdi;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
+use Throwable;
 use ZipArchive;
 
 /**
@@ -15,6 +17,11 @@ use ZipArchive;
  */
 final class PdfPageSplitter
 {
+    public const PAGE_CHUNK_SIZE = 100;
+
+    /** How many page PDFs to keep pending in a ZIP before flushing to disk. */
+    private const ZIP_FLUSH_PAGES = 5;
+
     public function __construct(
         private readonly string $storageDir,
         private readonly PdfVersionTransfer $versionTransfer,
@@ -22,9 +29,13 @@ final class PdfPageSplitter
     }
 
     /**
-     * @return array{id: string, pages: int, filename: string, path: string}
+     * Default API behaviour: one ZIP with every page as a separate PDF.
+     * With $bundleChunks and more than 100 pages: one ZIP that contains
+     * chunk ZIPs named `{base}_{from}_{to}.zip` (100 pages each).
+     *
+     * @return array{id: string, pages: int, filename: string, path: string, archives: int}
      */
-    public function splitToArchive(UploadedFile $pdf): array
+    public function splitToArchive(UploadedFile $pdf, bool $bundleChunks = false): array
     {
         $this->assertPdf($pdf);
 
@@ -38,11 +49,16 @@ final class PdfPageSplitter
 
             try {
                 $pageCount = $this->countPages($pdfPath);
-            } catch (\Throwable) {
+            } catch (Throwable) {
                 $pdfPath = $this->versionTransfer->forceToPdf14($sourcePdf, $workDir);
                 $pageCount = $this->countPages($pdfPath);
             }
 
+            if ($bundleChunks && $pageCount > self::PAGE_CHUNK_SIZE) {
+                return $this->splitToBundledChunkArchive($pdfPath, $originalFilename, $pageCount);
+            }
+
+            // API / single-chunk UI: one archive with all pages.
             $archives = $this->createPagedArchives($pdfPath, $originalFilename, $pageCount, $pageCount);
             if ($archives === []) {
                 throw new RuntimeException('No pages were produced from the PDF.');
@@ -55,9 +71,107 @@ final class PdfPageSplitter
                 'pages' => $pageCount,
                 'filename' => $first['filename'],
                 'path' => $first['path'],
+                'archives' => 1,
             ];
         } finally {
             $this->removeDirectory($workDir);
+        }
+    }
+
+    /**
+     * Build a parent ZIP that contains chunk archives of PAGE_CHUNK_SIZE pages each.
+     * Builds one chunk at a time and flushes the parent ZIP after each add so peak
+     * disk use is ~ parent + one chunk (not parent + all chunks).
+     *
+     * @return array{id: string, pages: int, filename: string, path: string, archives: int}
+     */
+    private function splitToBundledChunkArchive(string $pdfPath, string $originalFilename, int $pageCount): array
+    {
+        $chunkWorkDir = $this->createWorkDir('splitchunks');
+
+        $folderName = $this->sanitizeZipEntryName($originalFilename);
+        $archiveBase = pathinfo($folderName, \PATHINFO_FILENAME);
+        if ($archiveBase === '' || $archiveBase === '.' || $archiveBase === '..') {
+            $archiveBase = 'document';
+        }
+
+        $archivesDir = $this->ensureDirectory(
+            rtrim($this->storageDir, '/').'/archives',
+            'Unable to create archives directory.'
+        );
+
+        $id = bin2hex(random_bytes(16));
+        $parentPath = $archivesDir.'/'.$id.'.zip';
+        $downloadName = $archiveBase.'.zip';
+        $chunkCount = 0;
+        $parentZip = null;
+
+        try {
+            for ($from = 1; $from <= $pageCount; $from += self::PAGE_CHUNK_SIZE) {
+                $to = min($pageCount, $from + self::PAGE_CHUNK_SIZE - 1);
+                $chunkName = sprintf('%s_%d_%d.zip', $archiveBase, $from, $to);
+                $chunkPath = $chunkWorkDir.'/'.bin2hex(random_bytes(8)).'.zip';
+
+                try {
+                    $this->writePagesZip($pdfPath, $folderName, $from, $to, $chunkPath, $chunkWorkDir);
+
+                    if ($parentZip === null) {
+                        $parentZip = new ZipArchive();
+                        $flags = ($chunkCount === 0)
+                            ? (ZipArchive::CREATE | ZipArchive::OVERWRITE)
+                            : 0;
+                        if ($parentZip->open($parentPath, $flags) !== true) {
+                            throw new RuntimeException(
+                                $chunkCount === 0
+                                    ? 'Unable to create bundled ZIP archive.'
+                                    : 'Unable to reopen bundled ZIP archive.'
+                            );
+                        }
+                    }
+
+                    if (!$parentZip->addFile($chunkPath, $chunkName)) {
+                        throw new RuntimeException('Unable to add chunk archive to parent ZIP.');
+                    }
+
+                    if (!$this->closeZip($parentZip)) {
+                        throw $this->zipWriteException('Unable to finalize bundled ZIP archive.');
+                    }
+                    $parentZip = null;
+                    ++$chunkCount;
+                } finally {
+                    @unlink($chunkPath);
+                }
+            }
+
+            if ($chunkCount < 1) {
+                throw new RuntimeException('No pages were produced from the PDF.');
+            }
+
+            $this->writeArchiveMeta($id, [
+                'download_name' => $downloadName,
+                'pages' => $pageCount,
+                'archives' => $chunkCount,
+                'bundled' => true,
+                'folder' => $folderName,
+            ]);
+
+            return [
+                'id' => $id,
+                'pages' => $pageCount,
+                'filename' => $downloadName,
+                'path' => $parentPath,
+                'archives' => $chunkCount,
+            ];
+        } catch (Throwable $e) {
+            if (is_file($parentPath)) {
+                @unlink($parentPath);
+            }
+            throw $e;
+        } finally {
+            if ($parentZip instanceof ZipArchive) {
+                $this->closeZip($parentZip);
+            }
+            $this->removeDirectory($chunkWorkDir);
         }
     }
 
@@ -76,15 +190,27 @@ final class PdfPageSplitter
      * Build ZIP archive(s) with per-page PDFs.
      *
      * Layout inside each ZIP: `{originalFilename}/1.pdf`, `2.pdf`, …
-     * Download name: `{basename}_{from}_{to}.zip`.
+     * Download / entry name: `{basename}_{from}_{to}.zip`.
+     * On disk every archive is always `{id}.zip`.
      *
+     * - `$targetDir === null` — write to storage/archives and register meta for /api/downloads
+     * - `$targetDir` set — write only into that temp dir (for nesting into a parent ZIP); no download meta
+     *
+     * @param string $pdfPath
+     * @param string $originalFilename
+     * @param int $pageCount
+     * @param int $chunkSize
+     * @param string|null $targetDir
      * @return list<array{id: string, pages: int, filename: string, path: string, from: int, to: int}>
+     * @throws RandomException
+     * @throws Throwable
      */
     public function createPagedArchives(
         string $pdfPath,
         string $originalFilename,
         int $pageCount,
-        int $chunkSize = 100,
+        int $chunkSize = self::PAGE_CHUNK_SIZE,
+        ?string $targetDir = null,
     ): array {
         if ($pageCount < 1) {
             throw new RuntimeException('No pages were produced from the PDF.');
@@ -93,42 +219,29 @@ final class PdfPageSplitter
             throw new RuntimeException('Invalid archive page chunk size.');
         }
 
-        $workDir = $this->createWorkDir('pagesplit');
-        $pagesDir = $workDir.'/pages';
+        // null = public downloadable archive(s); non-null = temp chunk files for a parent ZIP.
+        $forDownload = $targetDir === null;
+        $archivesDir = $forDownload
+            ? $this->ensureDirectory(
+                rtrim($this->storageDir, '/').'/archives',
+                'Unable to create archives directory.'
+            )
+            : $this->ensureDirectory(
+                rtrim($targetDir, '/'),
+                'Unable to create chunk archive directory.'
+            );
+
+        $folderName = $this->sanitizeZipEntryName($originalFilename);
+        $archiveBase = pathinfo($folderName, \PATHINFO_FILENAME);
+        if ($archiveBase === '' || $archiveBase === '.' || $archiveBase === '..') {
+            $archiveBase = 'document';
+        }
+
+        $archives = [];
+        $pageWorkDir = $this->createWorkDir('pagesplit');
 
         try {
-            if (!mkdir($pagesDir, 0775, true) && !is_dir($pagesDir)) {
-                throw new RuntimeException('Unable to create pages directory.');
-            }
-
-            $folderName = $this->sanitizeZipEntryName($originalFilename);
-            $archiveBase = pathinfo($folderName, \PATHINFO_FILENAME);
-            if ($archiveBase === '' || $archiveBase === '.' || $archiveBase === '..') {
-                $archiveBase = 'document';
-            }
-
-            $pageFiles = [];
-            for ($page = 1; $page <= $pageCount; ++$page) {
-                $pagePdf = new Fpdi();
-                $pagePdf->setSourceFile($pdfPath);
-                $templateId = $pagePdf->importPage($page);
-                $size = $pagePdf->getTemplateSize($templateId);
-
-                $pagePdf->AddPage($size['orientation'], [$size['width'], $size['height']]);
-                $pagePdf->useTemplate($templateId);
-
-                $pageFile = sprintf('%s/%d.pdf', $pagesDir, $page);
-                $pagePdf->Output('F', $pageFile);
-                $pageFiles[$page] = $pageFile;
-            }
-
-            $archivesDir = rtrim($this->storageDir, '/').'/archives';
-            if (!is_dir($archivesDir) && !mkdir($archivesDir, 0775, true) && !is_dir($archivesDir)) {
-                throw new RuntimeException('Unable to create archives directory.');
-            }
-
-            $archives = [];
-
+            // Disk + addFile, flush every ZIP_FLUSH_PAGES so neither memory nor temp disk grows with all pages.
             for ($from = 1; $from <= $pageCount; $from += $chunkSize) {
                 $to = min($pageCount, $from + $chunkSize - 1);
                 $pagesInZip = $to - $from + 1;
@@ -137,26 +250,22 @@ final class PdfPageSplitter
                 $id = bin2hex(random_bytes(16));
                 $archivePath = $archivesDir.'/'.$id.'.zip';
 
-                $zip = new ZipArchive();
-                if ($zip->open($archivePath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
-                    throw new RuntimeException('Unable to create ZIP archive.');
+                try {
+                    $this->writePagesZip($pdfPath, $folderName, $from, $to, $archivePath, $pageWorkDir);
+                } catch (Throwable $e) {
+                    @unlink($archivePath);
+                    throw $e;
                 }
 
-                for ($page = $from; $page <= $to; ++$page) {
-                    $zip->addFile(
-                        $pageFiles[$page],
-                        sprintf('%s/%d.pdf', $folderName, $page)
-                    );
+                if ($forDownload) {
+                    $this->writeArchiveMeta($id, [
+                        'download_name' => $downloadName,
+                        'pages' => $pagesInZip,
+                        'from' => $from,
+                        'to' => $to,
+                        'folder' => $folderName,
+                    ]);
                 }
-                $zip->close();
-
-                $this->writeArchiveMeta($id, [
-                    'download_name' => $downloadName,
-                    'pages' => $pagesInZip,
-                    'from' => $from,
-                    'to' => $to,
-                    'folder' => $folderName,
-                ]);
 
                 $archives[] = [
                     'id' => $id,
@@ -170,7 +279,138 @@ final class PdfPageSplitter
 
             return $archives;
         } finally {
-            $this->removeDirectory($workDir);
+            $this->removeDirectory($pageWorkDir);
+        }
+    }
+
+    /**
+     * Write pages $from..$to into $archivePath, flushing the ZIP every ZIP_FLUSH_PAGES
+     * so FPDF/ZipArchive buffers and temp page files stay bounded.
+     */
+    private function writePagesZip(
+        string $pdfPath,
+        string $folderName,
+        int $from,
+        int $to,
+        string $archivePath,
+        string $pageWorkDir,
+    ): void {
+        $zip = null;
+        $pendingFiles = [];
+
+        try {
+            for ($page = $from; $page <= $to; ++$page) {
+                if ($zip === null) {
+                    $zip = new ZipArchive();
+                    $flags = ($page === $from)
+                        ? (ZipArchive::CREATE | ZipArchive::OVERWRITE)
+                        : 0;
+                    if ($zip->open($archivePath, $flags) !== true) {
+                        throw new RuntimeException(
+                            $page === $from
+                                ? 'Unable to create ZIP archive.'
+                                : 'Unable to reopen ZIP archive for append.'
+                        );
+                    }
+                }
+
+                $pageFile = sprintf('%s/%d.pdf', $pageWorkDir, $page);
+
+                $this->renderPageToFile($pdfPath, $page, $pageFile);
+
+                if (!$zip->addFile($pageFile, sprintf('%s/%d.pdf', $folderName, $page))) {
+                    throw new RuntimeException(sprintf('Unable to add page %d to ZIP.', $page));
+                }
+                $pendingFiles[] = $pageFile;
+
+                $isLast = $page === $to;
+                $shouldFlush = $isLast || count($pendingFiles) >= self::ZIP_FLUSH_PAGES;
+                if (!$shouldFlush) {
+                    continue;
+                }
+
+                if (!$this->closeZip($zip)) {
+                    throw $this->zipWriteException('Unable to finalize ZIP archive.');
+                }
+                $zip = null;
+
+                foreach ($pendingFiles as $file) {
+                    @unlink($file);
+                }
+                $pendingFiles = [];
+            }
+        } finally {
+            if ($zip instanceof ZipArchive) {
+                $this->closeZip($zip);
+            }
+            foreach ($pendingFiles as $file) {
+                @unlink($file);
+            }
+        }
+    }
+
+    private function closeZip(ZipArchive $zip): bool
+    {
+        $warning = null;
+        set_error_handler(static function (int $severity, string $message) use (&$warning): bool {
+            $warning = $message;
+
+            return true;
+        });
+
+        try {
+            $ok = $zip->close();
+        } catch (\ValueError) {
+            // Already closed / uninitialized.
+            $ok = false;
+        } finally {
+            restore_error_handler();
+        }
+
+        if (is_string($warning) && $warning !== '' && $this->isDiskQuotaMessage($warning)) {
+            throw $this->zipWriteException('ZIP write failed.');
+        }
+
+        return $ok === true;
+    }
+
+    private function zipWriteException(string $prefix): RuntimeException
+    {
+        return new RuntimeException(
+            $prefix.' Disk quota exceeded while writing the archive. '
+            .'Free space in the hosting account (delete old files under var/storage) or raise the account quota.'
+        );
+    }
+
+    private function isDiskQuotaMessage(string $message): bool
+    {
+        $message = strtolower($message);
+
+        return str_contains($message, 'quota')
+            || str_contains($message, 'disk full')
+            || str_contains($message, 'no space');
+    }
+
+    private function renderPageToFile(string $pdfPath, int $page, string $destPath): void
+    {
+        $pagePdf = new Fpdi();
+        $pagePdf->setSourceFile($pdfPath);
+        $templateId = $pagePdf->importPage($page);
+        $size = $pagePdf->getTemplateSize($templateId);
+
+        $pagePdf->AddPage($size['orientation'], [$size['width'], $size['height']]);
+        $pagePdf->useTemplate($templateId);
+
+        // Write straight to disk — Output('S') keeps the full page PDF in memory and
+        // together with ZipArchive::addFromString quickly exhausts shared-hosting limits.
+        $pagePdf->Output('F', $destPath);
+        unset($pagePdf);
+
+        if (!is_file($destPath) || filesize($destPath) === 0) {
+            throw new RuntimeException(sprintf(
+                'Unable to write page %d (disk full, quota exceeded, or render failed).',
+                $page
+            ));
         }
     }
 
@@ -266,10 +506,40 @@ final class PdfPageSplitter
         }
     }
 
+    private function ensureDirectory(string $dir, string $errorMessage): string
+    {
+        if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+            throw new RuntimeException($errorMessage);
+        }
+
+        return $dir;
+    }
+
     private function createWorkDir(string $prefix): string
     {
-        $base = rtrim($this->storageDir, '/').'/tmp';
-        if (!is_dir($base) && !mkdir($base, 0775, true) && !is_dir($base)) {
+        // Prefer system temp when it is writable — on shared hosting the account
+        // quota often applies only to the home/web tree, not to /tmp.
+        $candidates = array_values(array_unique([
+            rtrim(sys_get_temp_dir(), '/'),
+            rtrim($this->storageDir, '/').'/tmp',
+        ]));
+
+        $base = null;
+        foreach ($candidates as $candidate) {
+            if ($candidate === '') {
+                continue;
+            }
+            if (!is_dir($candidate) && !@mkdir($candidate, 0775, true) && !is_dir($candidate)) {
+                continue;
+            }
+            if (!is_writable($candidate)) {
+                continue;
+            }
+            $base = $candidate;
+            break;
+        }
+
+        if ($base === null) {
             throw new RuntimeException('Unable to create temp storage directory.');
         }
 

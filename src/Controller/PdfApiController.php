@@ -100,8 +100,12 @@ final class PdfApiController extends AbstractController
             ], Response::HTTP_BAD_REQUEST);
         }
 
+        // bundle_chunks is used by the /split UI only. Plain API clients omit it
+        // and still receive one ZIP with every page PDF (previous behaviour).
+        $bundleChunks = $request->request->getBoolean('bundle_chunks');
+
         try {
-            $result = $this->pageSplitter->splitToArchive($file);
+            $result = $this->pageSplitter->splitToArchive($file, $bundleChunks);
         } catch (RuntimeException $e) {
             return $this->json([
                 'error' => 'Processing Error',
@@ -115,12 +119,17 @@ final class PdfApiController extends AbstractController
             UrlGeneratorInterface::ABSOLUTE_URL
         );
 
-        return $this->json([
+        $payload = [
             'id' => $result['id'],
             'pages' => $result['pages'],
             'filename' => $result['filename'],
             'download_url' => $downloadUrl,
-        ]);
+        ];
+        if ($bundleChunks) {
+            $payload['archives'] = $result['archives'];
+        }
+
+        return $this->json($payload);
     }
 
     #[Route('/pdf/merge', name: 'api_pdf_merge', methods: ['POST'])]
